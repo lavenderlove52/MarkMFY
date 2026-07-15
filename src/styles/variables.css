@@ -1,0 +1,22 @@
+/**
+ * 全局样式与主题 CSS 变量。
+ * 运行时由 theme 模块根据 settings 覆盖这些默认值。
+ */
+:root {
+  --mm-color-bg: #ffffff;
+  --mm-color-bg-muted: #f6f7f9;
+  --mm-color-text: #1f1f1f;
+  --mm-color-text-muted: #666666;
+  --mm-color-border: rgba(0, 0, 0, 0.12);
+  --mm-color-accent: #396cd8;
+  --mm-color-panel: #ffffff;
+  --mm-color-danger: #cf222e;
+  --mm-editor-font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mm-editor-font-size: 15px;
+}
+
+html,
+body {
+  color: var(--mm-color-text);
+  background: var(--mm-color-bg);
+}
