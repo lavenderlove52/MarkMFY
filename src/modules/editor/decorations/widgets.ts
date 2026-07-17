@@ -101,6 +101,7 @@ export class HrWidget extends WidgetType {
         scrollIntoView: true,
       });
       view.focus();
+      view.requestMeasure();
     };
 
     wrap.addEventListener("dblclick", enterSource);

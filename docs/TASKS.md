@@ -734,3 +734,11 @@
 - 依赖：Task079
 - 状态：已完成
 - 实现说明：`headingCaretBootstrap` ViewPlugin + `Editor.vue` focus。
+
+### Task082 UI 清新主题包 + 经典主题可切换
+- 输入：桌面感不足、紫雾默认偏网页工具；需雾蓝清新设计且保留原版
+- 输出：`uiStyle: fresh|classic` 设置项；fresh 雾蓝+鼠尾草绿 token；classic 保留原紫雾；壳层/标签/文件树/编辑画布/Toast 用 token 降噪
+- 验收：设置中可切换清新/经典与浅/深色；`vue-tsc`/`eslint`/`npm run build` 通过；业务功能不变
+- 依赖：Task036, Task037
+- 状态：已完成
+- 实现说明：扩展 `applyTheme` 四套 token；settings/Rust 持久化 `uiStyle`；默认 fresh。

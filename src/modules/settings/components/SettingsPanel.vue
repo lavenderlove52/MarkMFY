@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { KeybindingEditor } from "../../command";
 import { useSettingsStore } from "../store";
-import type { ThemeMode } from "../types";
+import type { ThemeMode, UiStyle } from "../types";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{
@@ -13,6 +13,7 @@ const emit = defineEmits<{
 
 const settings = useSettingsStore();
 const localTheme = ref<ThemeMode>(settings.theme);
+const localUiStyle = ref<UiStyle>(settings.uiStyle);
 const localFontFamily = ref(settings.editorFontFamily);
 const localFontSize = ref(settings.editorFontSize);
 const localKeybindings = ref<Record<string, string>>({ ...settings.keybindings });
@@ -42,6 +43,7 @@ watch(
   (open) => {
     if (!open) return;
     localTheme.value = settings.theme;
+    localUiStyle.value = settings.uiStyle;
     localFontFamily.value = settings.editorFontFamily;
     localFontSize.value = settings.editorFontSize;
     localKeybindings.value = { ...settings.keybindings };
@@ -61,6 +63,7 @@ function schedulePersist(): void {
 function applyAndPersist(): void {
   settings.patch({
     theme: localTheme.value,
+    uiStyle: localUiStyle.value,
     editorFontFamily: localFontFamily.value,
     editorFontSize: localFontSize.value,
     keybindings: { ...localKeybindings.value },
@@ -70,6 +73,11 @@ function applyAndPersist(): void {
 
 function onThemeChange(theme: ThemeMode): void {
   localTheme.value = theme;
+  applyAndPersist();
+}
+
+function onUiStyleChange(uiStyle: UiStyle): void {
+  localUiStyle.value = uiStyle;
   applyAndPersist();
 }
 
@@ -114,7 +122,7 @@ onBeforeUnmount(() => {
       <section class="mm-settings-section">
         <h3 class="mm-settings-section__title">外观</h3>
         <div class="mm-settings-row">
-          <span class="mm-settings-row__label">主题</span>
+          <span class="mm-settings-row__label">明暗</span>
           <div class="mm-settings-row__controls">
             <button
               type="button"
@@ -134,6 +142,30 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        <div class="mm-settings-row">
+          <span class="mm-settings-row__label">界面风格</span>
+          <div class="mm-settings-row__controls">
+            <button
+              type="button"
+              class="mm-settings-chip"
+              :class="{ 'mm-settings-chip--active': localUiStyle === 'fresh' }"
+              title="雾蓝清新，编辑区优先"
+              @click="onUiStyleChange('fresh')"
+            >
+              清新
+            </button>
+            <button
+              type="button"
+              class="mm-settings-chip"
+              :class="{ 'mm-settings-chip--active': localUiStyle === 'classic' }"
+              title="保留原版紫雾布局与配色"
+              @click="onUiStyleChange('classic')"
+            >
+              经典
+            </button>
+          </div>
+        </div>
+        <p class="mm-settings-row-hint">清新为默认设计；经典保留安装前的原版视觉。</p>
       </section>
 
       <section class="mm-settings-section">
@@ -194,7 +226,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.38);
+  background: color-mix(in srgb, var(--mm-color-text) 28%, transparent);
   backdrop-filter: blur(2px);
 }
 
@@ -261,6 +293,13 @@ onBeforeUnmount(() => {
 .mm-settings-row__label {
   flex: 0 0 88px;
   font-size: 13px;
+}
+
+.mm-settings-row-hint {
+  margin: -2px 0 8px;
+  font-size: 12px;
+  color: var(--mm-color-text-tertiary, var(--mm-color-text-muted));
+  line-height: 1.45;
 }
 
 .mm-settings-row--stack .mm-settings-row__label {

@@ -56,10 +56,14 @@ let resizeStartX = 0;
 let resizeStartWidth = 0;
 
 function syncThemeFromSettings(): void {
-  applyTheme(settingsStore.theme, {
-    fontFamily: settingsStore.editorFontFamily,
-    fontSize: settingsStore.editorFontSize,
-  });
+  applyTheme(
+    settingsStore.theme,
+    {
+      fontFamily: settingsStore.editorFontFamily,
+      fontSize: settingsStore.editorFontSize,
+    },
+    settingsStore.uiStyle,
+  );
 }
 
 function syncLayoutFromSettings(): void {
@@ -278,6 +282,7 @@ watch(
 watch(
   () => [
     settingsStore.theme,
+    settingsStore.uiStyle,
     settingsStore.editorFontFamily,
     settingsStore.editorFontSize,
   ],
@@ -685,8 +690,7 @@ body.mm-resizing-col * {
   gap: 0;
   padding: 0 0 0 8px;
   border-bottom: 1px solid var(--mm-color-border);
-  background: color-mix(in srgb, var(--mm-color-surface) 88%, var(--mm-color-bg-muted));
-  box-shadow: var(--mm-shadow-panel);
+  background: var(--mm-color-surface);
   flex-shrink: 0;
   min-height: 36px;
   height: 36px;
@@ -717,7 +721,7 @@ body.mm-resizing-col * {
 .app-shell__menu-trigger:hover,
 .app-shell__menu-trigger--open {
   background: var(--mm-color-hover);
-  border-color: var(--mm-color-border);
+  border-color: transparent;
 }
 
 .app-shell__menu-list {
@@ -777,11 +781,11 @@ body.mm-resizing-col * {
 
 .app-shell__path {
   font-size: 12px;
-  color: var(--mm-color-text-muted);
-  background: var(--mm-color-bg-muted);
+  color: var(--mm-color-text-tertiary, var(--mm-color-text-muted));
+  background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 2px 10px;
+  border-radius: var(--mm-radius-sm);
+  padding: 2px 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -817,7 +821,7 @@ body.mm-resizing-col * {
 
 .app-shell__window-btn--close:hover {
   background: var(--mm-color-danger);
-  color: #fff;
+  color: var(--mm-color-surface-elevated);
 }
 
 .app-shell__main {
@@ -829,7 +833,7 @@ body.mm-resizing-col * {
 
 .app-shell__sidebar {
   flex-shrink: 0;
-  background: var(--mm-color-panel);
+  background: var(--mm-color-sidebar, var(--mm-color-panel));
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -848,9 +852,9 @@ body.mm-resizing-col * {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--mm-color-text-muted);
-  border-bottom: 1px solid var(--mm-color-border);
-  background: var(--mm-color-bg-muted);
+  color: var(--mm-color-text-tertiary, var(--mm-color-text-muted));
+  border-bottom: 1px solid transparent;
+  background: transparent;
   flex-shrink: 0;
 }
 
@@ -924,15 +928,13 @@ body.mm-resizing-col * {
   display: flex;
   flex-direction: column;
   min-width: 120px;
-  background: var(--mm-color-bg);
+  background: var(--mm-color-editor, var(--mm-color-bg));
 }
 
 .app-shell__editor-body {
   flex: 1;
   min-height: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent 160px),
-    var(--mm-color-bg);
+  background: var(--mm-color-editor, var(--mm-color-bg));
 }
 
 .app-shell__git {
@@ -941,7 +943,7 @@ body.mm-resizing-col * {
   flex-direction: column;
   min-width: 0;
   border-left: 1px solid var(--mm-color-border);
-  background: var(--mm-color-panel);
+  background: var(--mm-color-sidebar, var(--mm-color-panel));
 }
 
 .app-shell__git-panel {

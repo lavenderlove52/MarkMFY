@@ -1,7 +1,13 @@
 import { defineStore } from "pinia";
 import { loadSettings, normalizeInvokeError, saveSettings } from "../../ipc";
 import { toastError } from "../../notify";
-import { DEFAULT_SETTINGS, normalizeSettings, type AppSettings, type ThemeMode } from "./types";
+import {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  type AppSettings,
+  type ThemeMode,
+  type UiStyle,
+} from "./types";
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
@@ -14,6 +20,7 @@ export const useSettingsStore = defineStore("settings", {
     snapshot(state): AppSettings {
       return {
         theme: state.theme,
+        uiStyle: state.uiStyle,
         editorFontFamily: state.editorFontFamily,
         editorFontSize: state.editorFontSize,
         keybindings: { ...state.keybindings },
@@ -34,6 +41,7 @@ export const useSettingsStore = defineStore("settings", {
         const remote = await loadSettings();
         const normalized = normalizeSettings(remote);
         this.theme = normalized.theme;
+        this.uiStyle = normalized.uiStyle;
         this.editorFontFamily = normalized.editorFontFamily;
         this.editorFontSize = normalized.editorFontSize;
         this.keybindings = { ...normalized.keybindings };
@@ -47,6 +55,7 @@ export const useSettingsStore = defineStore("settings", {
       } catch (err) {
         console.warn("[markmfy] load settings failed, using defaults", normalizeInvokeError(err));
         this.theme = DEFAULT_SETTINGS.theme;
+        this.uiStyle = DEFAULT_SETTINGS.uiStyle;
         this.editorFontFamily = DEFAULT_SETTINGS.editorFontFamily;
         this.editorFontSize = DEFAULT_SETTINGS.editorFontSize;
         this.keybindings = {};
@@ -78,6 +87,10 @@ export const useSettingsStore = defineStore("settings", {
       this.theme = theme === "dark" ? "dark" : "light";
     },
 
+    setUiStyle(uiStyle: UiStyle): void {
+      this.uiStyle = uiStyle === "classic" ? "classic" : "fresh";
+    },
+
     setEditorFontFamily(fontFamily: string): void {
       const next = fontFamily.trim();
       this.editorFontFamily = next || DEFAULT_SETTINGS.editorFontFamily;
@@ -98,6 +111,7 @@ export const useSettingsStore = defineStore("settings", {
     patch(partial: Partial<AppSettings>): void {
       const next = normalizeSettings({ ...this.snapshot, ...partial });
       this.theme = next.theme;
+      this.uiStyle = next.uiStyle;
       this.editorFontFamily = next.editorFontFamily;
       this.editorFontSize = next.editorFontSize;
       this.keybindings = { ...next.keybindings };

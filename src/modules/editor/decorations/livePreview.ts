@@ -317,28 +317,113 @@ function handleHeading(
   }
 }
 
+const HEADING_LINE_SELECTOR =
+  ".cm-line.mm-h1, .cm-line.mm-h2, .cm-line.mm-h3, .cm-line.mm-h4, .cm-line.mm-h5, .cm-line.mm-h6";
+
+/**
+ * 按实际 DOM/纵向命中找标题行。大字号标题下 posAtCoords 常偏到下一行，
+ * 导致双击 H2 却把 H3 切进源码态。
+ */
+function findHeadingLineAtPointer(
+  view: EditorView,
+  event: MouseEvent,
+): { lineFrom: number; lineTo: number; rangeFrom: number; rangeTo: number } | null {
+  const target = event.target;
+  let lineEl: Element | null =
+    target instanceof Element ? target.closest(HEADING_LINE_SELECTOR) : null;
+
+  if (!lineEl || !view.contentDOM.contains(lineEl)) {
+    let best: { el: Element; dist: number } | null = null;
+    for (const el of view.contentDOM.querySelectorAll(HEADING_LINE_SELECTOR)) {
+      const rect = el.getBoundingClientRect();
+      if (event.clientY < rect.top || event.clientY > rect.bottom) continue;
+      const dist = Math.abs((rect.top + rect.bottom) / 2 - event.clientY);
+      if (!best || dist < best.dist) best = { el, dist };
+    }
+    lineEl = best?.el ?? null;
+  }
+
+  if (lineEl) {
+    try {
+      const line = view.state.doc.lineAt(view.posAtDOM(lineEl, 0));
+      if (headingContentStart(view.state, line.from, line.to) != null) {
+        const { from, to } = headingLineRange(view.state, line.from);
+        return { lineFrom: line.from, lineTo: line.to, rangeFrom: from, rangeTo: to };
+      }
+    } catch {
+      /* 再走语法树回退 */
+    }
+  }
+
+  // 源码态下没有 mm-h*：用各标题行的屏幕坐标匹配
+  const best = {
+    lineFrom: -1,
+    lineTo: -1,
+    rangeFrom: -1,
+    rangeTo: -1,
+    dist: Number.POSITIVE_INFINITY,
+  };
+  syntaxTree(view.state).iterate({
+    enter(node) {
+      if (!HEADING_NAMES.includes(node.name)) return;
+      const line = view.state.doc.lineAt(node.from);
+      const coords = view.coordsAtPos(line.from);
+      const coordsEnd = view.coordsAtPos(line.to);
+      if (!coords || !coordsEnd) return;
+      const top = Math.min(coords.top, coordsEnd.top);
+      const bottom = Math.max(coords.bottom, coordsEnd.bottom);
+      if (event.clientY < top || event.clientY > bottom) return;
+      const dist = Math.abs((top + bottom) / 2 - event.clientY);
+      if (dist >= best.dist) return false;
+      const { from, to } = headingLineRange(view.state, line.from);
+      best.lineFrom = line.from;
+      best.lineTo = line.to;
+      best.rangeFrom = from;
+      best.rangeTo = to;
+      best.dist = dist;
+      return false;
+    },
+  });
+  if (best.lineFrom < 0) return null;
+  return {
+    lineFrom: best.lineFrom,
+    lineTo: best.lineTo,
+    rangeFrom: best.rangeFrom,
+    rangeTo: best.rangeTo,
+  };
+}
+
 /** 双击标题行 → 进入 Markdown 源码编辑态（显示 `#`）。 */
 function handleHeadingDblClick(view: EditorView, event: MouseEvent): boolean {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return false;
   const target = event.target;
   if (!(target instanceof Element) || isPreviewWidgetTarget(target)) return false;
 
-  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-  if (pos == null) return false;
-  const line = view.state.doc.lineAt(pos);
-  const contentStart = headingContentStart(view.state, line.from, line.to);
-  if (contentStart == null) return false;
+  const hit = findHeadingLineAtPointer(view, event);
+  if (!hit) return false;
 
-  const { from, to } = headingLineRange(view.state, line.from);
-  if (isBlockInSourceEdit(view.state, from, to)) return false;
+  if (isBlockInSourceEdit(view.state, hit.rangeFrom, hit.rangeTo)) return false;
+
+  const contentStart = headingContentStart(view.state, hit.lineFrom, hit.lineTo) ?? hit.lineFrom;
+  const midY = (() => {
+    const c0 = view.coordsAtPos(hit.lineFrom);
+    const c1 = view.coordsAtPos(hit.lineTo);
+    if (c0 && c1) return (Math.min(c0.top, c1.top) + Math.max(c0.bottom, c1.bottom)) / 2;
+    return event.clientY;
+  })();
+  let clickPos = view.posAtCoords({ x: event.clientX, y: midY });
+  if (clickPos == null || clickPos < hit.lineFrom || clickPos > hit.lineTo) {
+    clickPos = contentStart;
+  }
 
   event.preventDefault();
   view.dispatch({
-    effects: requestBlockSourceEdit.of({ from, to }),
-    selection: { anchor: Math.max(line.from, Math.min(pos, line.to)) },
+    effects: requestBlockSourceEdit.of({ from: hit.rangeFrom, to: hit.rangeTo }),
+    selection: { anchor: Math.max(hit.lineFrom, Math.min(clickPos, hit.lineTo)) },
     scrollIntoView: true,
   });
   view.focus();
+  view.requestMeasure();
   return true;
 }
 
@@ -349,39 +434,28 @@ function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
   if (!(target instanceof Element)) return false;
   if (isPreviewWidgetTarget(target)) return false;
 
-  const headingSelector = ".cm-line.mm-h1, .cm-line.mm-h2, .cm-line.mm-h3, .cm-line.mm-h4, .cm-line.mm-h5, .cm-line.mm-h6";
-  let lineEl: Element | null = target.closest(headingSelector);
-  if (!lineEl) {
-    for (const el of view.contentDOM.querySelectorAll(headingSelector)) {
-      const rect = el.getBoundingClientRect();
-      if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
-        lineEl = el;
-        break;
-      }
-    }
-  }
-  if (!lineEl) return false;
+  const hit = findHeadingLineAtPointer(view, event);
+  if (!hit) return false;
 
-  let linePos: number;
-  try {
-    linePos = view.posAtDOM(lineEl, 0);
-  } catch {
-    return false;
-  }
-  const line = view.state.doc.lineAt(linePos);
-
-  const midY = (lineEl.getBoundingClientRect().top + lineEl.getBoundingClientRect().bottom) / 2;
+  const lineFrom = hit.lineFrom;
+  const lineTo = hit.lineTo;
+  const midY = (() => {
+    const c0 = view.coordsAtPos(lineFrom);
+    const c1 = view.coordsAtPos(lineTo);
+    if (c0 && c1) return (Math.min(c0.top, c1.top) + Math.max(c0.bottom, c1.bottom)) / 2;
+    return event.clientY;
+  })();
   let clickPos = view.posAtCoords({ x: event.clientX, y: midY });
-  if (clickPos == null || clickPos < line.from || clickPos > line.to) {
+  if (clickPos == null || clickPos < lineFrom || clickPos > lineTo) {
     clickPos = view.posAtCoords({ x: event.clientX, y: event.clientY });
   }
 
-  const contentStart = headingContentStart(view.state, line.from, line.to) ?? line.from;
+  const contentStart = headingContentStart(view.state, lineFrom, lineTo) ?? lineFrom;
 
-  const mappedOk = clickPos != null && clickPos >= line.from && clickPos <= line.to;
+  const mappedOk = clickPos != null && clickPos >= lineFrom && clickPos <= lineTo;
   const alreadyOnLine =
     mappedOk &&
-    view.state.selection.ranges.some((r) => r.from <= line.to && r.to >= line.from);
+    view.state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
 
   // 已点在标题行正文上且选区已正确时交给 CM 默认行为
   if (mappedOk && alreadyOnLine && clickPos! >= contentStart) {
@@ -983,6 +1057,10 @@ export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extensio
         ) {
           this.decorations = buildDecorations(update.view, resolveImageSrc);
         }
+        // Widget ↔ 源码态行高变化大，不重测会导致下方标题点偏/点不到
+        if (sourceModeToggled) {
+          update.view.requestMeasure();
+        }
       }
     },
     {
@@ -1071,16 +1149,16 @@ const livePreviewTheme = EditorView.baseTheme({
     overflow: "hidden",
     verticalAlign: "baseline",
   },
-  ".mm-h1": { fontSize: "1.95em", fontWeight: "720", lineHeight: "1.35", textDecoration: "none" },
-  ".mm-h2": { fontSize: "1.55em", fontWeight: "700", lineHeight: "1.38", textDecoration: "none" },
-  ".mm-h3": { fontSize: "1.28em", fontWeight: "680", lineHeight: "1.42", textDecoration: "none" },
-  ".mm-h4": { fontSize: "1.14em", fontWeight: "650", lineHeight: "1.45", textDecoration: "none" },
-  ".mm-h5": { fontSize: "1.04em", fontWeight: "620", lineHeight: "1.45", textDecoration: "none" },
+  ".mm-h1": { fontSize: "1.75em", fontWeight: "650", lineHeight: "1.35", textDecoration: "none" },
+  ".mm-h2": { fontSize: "1.375em", fontWeight: "620", lineHeight: "1.45", textDecoration: "none" },
+  ".mm-h3": { fontSize: "1.125em", fontWeight: "600", lineHeight: "1.5", textDecoration: "none" },
+  ".mm-h4": { fontSize: "1.05em", fontWeight: "600", lineHeight: "1.5", textDecoration: "none" },
+  ".mm-h5": { fontSize: "1em", fontWeight: "600", lineHeight: "1.5", textDecoration: "none" },
   ".mm-h6": {
-    fontSize: "1em",
+    fontSize: "0.95em",
     fontWeight: "600",
     color: "var(--mm-color-text-muted)",
-    lineHeight: "1.45",
+    lineHeight: "1.5",
     textDecoration: "none",
   },
   ".mm-bold": { fontWeight: "700" },
@@ -1172,12 +1250,13 @@ const livePreviewTheme = EditorView.baseTheme({
     backgroundColor: "transparent",
   },
   ".mm-blockquote": {
-    borderLeft: "3px solid var(--mm-color-accent)",
+    borderLeft: "2px solid var(--mm-color-border-strong, var(--mm-color-accent))",
     paddingLeft: "12px",
     color: "var(--mm-color-text-muted)",
-    background: "linear-gradient(90deg, var(--mm-color-accent-soft), transparent 72%)",
+    background: "var(--mm-color-accent-soft)",
   },
-  ".mm-link": { color: "var(--mm-color-accent)", textDecoration: "underline", cursor: "pointer" },
+  ".mm-link": { color: "var(--mm-color-accent)", textDecoration: "none", cursor: "pointer" },
+  ".mm-link:hover": { textDecoration: "underline" },
   ".mm-list-mark": { color: "var(--mm-color-text-muted)" },
   ".mm-bullet": { color: "var(--mm-color-text-muted)", marginRight: "2px" },
   ".mm-hr-wrap": {
@@ -1415,17 +1494,24 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".mm-source-editing-first": {
     boxShadow: "inset 3px 0 0 var(--mm-color-accent)",
+    /* 允许提示条完整显示，避免被行盒裁切 */
+    overflow: "visible",
   },
   ".mm-source-editing-first::before": {
     content: '"源码编辑中 · 点击其它区域恢复预览"',
     display: "block",
+    boxSizing: "border-box",
     fontSize: "11px",
+    lineHeight: "1.45",
     color: "var(--mm-color-accent)",
     background: "var(--mm-color-accent-soft)",
     borderBottom: "1px solid var(--mm-color-border)",
-    padding: "2px 8px",
-    margin: "0 -24px 4px",
-    fontFamily:
-      '"Segoe UI", system-ui, -apple-system, sans-serif',
+    /* 负边距会盖住下一行标题并抢走点击；改为行内留白 */
+    padding: "6px 10px",
+    margin: "0 0 6px 0",
+    fontFamily: "var(--mm-ui-font-family, \"Segoe UI\", system-ui, sans-serif)",
+    /* 提示条不参与命中，避免挡到下方「主流 Agent…」等标题 */
+    pointerEvents: "none",
+    userSelect: "none",
   },
 });

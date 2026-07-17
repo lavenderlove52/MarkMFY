@@ -77,10 +77,10 @@ function onDialogCancel(): void {
 .tabs-bar {
   display: flex;
   overflow-x: auto;
-  gap: 4px;
-  padding: 7px 10px 0;
+  gap: 2px;
+  padding: 6px 10px 0;
   border-bottom: 1px solid var(--mm-color-border);
-  background: var(--mm-color-bg);
+  background: var(--mm-color-editor, var(--mm-color-bg));
 }
 
 .tabs-bar__tab {
@@ -88,14 +88,18 @@ function onDialogCancel(): void {
   align-items: center;
   gap: 6px;
   max-width: 220px;
-  padding: 7px 10px;
+  padding: 7px 10px 8px;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
-  border-bottom: none;
+  border-bottom: 2px solid transparent;
   border-radius: var(--mm-radius-sm) var(--mm-radius-sm) 0 0;
   white-space: nowrap;
   color: var(--mm-color-text-muted);
+  transition:
+    background var(--mm-duration-fast, 120ms) var(--mm-ease-standard, ease-out),
+    color var(--mm-duration-fast, 120ms) var(--mm-ease-standard, ease-out);
 }
 
 .tabs-bar__tab:hover {
@@ -104,10 +108,11 @@ function onDialogCancel(): void {
 }
 
 .tabs-bar__tab--active {
-  border-color: var(--mm-color-border);
-  background: var(--mm-color-surface);
+  border-color: transparent;
+  border-bottom-color: var(--mm-color-accent);
+  background: transparent;
   color: var(--mm-color-text);
-  box-shadow: 0 -1px 0 var(--mm-color-surface) inset;
+  font-weight: 600;
 }
 
 .tabs-bar__name {
@@ -117,7 +122,8 @@ function onDialogCancel(): void {
 
 .tabs-bar__dirty-dot {
   color: var(--mm-color-accent);
-  font-size: 10px;
+  font-size: 9px;
+  opacity: 0.85;
 }
 
 .tabs-bar__close {
@@ -127,11 +133,19 @@ function onDialogCancel(): void {
   font-size: 14px;
   line-height: 1;
   color: inherit;
-  opacity: 0.6;
+  opacity: 0;
+  border-radius: var(--mm-radius-sm);
+  padding: 0 2px;
+}
+
+.tabs-bar__tab:hover .tabs-bar__close,
+.tabs-bar__tab--active .tabs-bar__close {
+  opacity: 0.55;
 }
 
 .tabs-bar__close:hover {
-  opacity: 1;
+  opacity: 1 !important;
   color: var(--mm-color-danger);
+  background: var(--mm-color-danger-soft);
 }
 </style>

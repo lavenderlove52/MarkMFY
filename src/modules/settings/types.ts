@@ -2,8 +2,13 @@
 
 export type ThemeMode = "light" | "dark";
 
+/** 界面风格包：classic=原版紫雾；fresh=雾蓝清新（默认） */
+export type UiStyle = "classic" | "fresh";
+
 export interface AppSettings {
   theme: ThemeMode;
+  /** 界面风格：保留原版或使用清新设计 */
+  uiStyle: UiStyle;
   /** CSS font-family 字符串 */
   editorFontFamily: string;
   /** 编辑器字号（px），范围 10–28 */
@@ -28,6 +33,7 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "light",
+  uiStyle: "fresh",
   editorFontFamily: '"Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif',
   editorFontSize: 16,
   keybindings: {},
@@ -70,6 +76,7 @@ function normalizeColor(raw: unknown, fallback: string): string {
 
 export function normalizeSettings(raw: Partial<AppSettings> | null | undefined): AppSettings {
   const theme = raw?.theme === "dark" ? "dark" : "light";
+  const uiStyle = raw?.uiStyle === "classic" ? "classic" : "fresh";
   const fontFamily =
     typeof raw?.editorFontFamily === "string" && raw.editorFontFamily.trim()
       ? raw.editorFontFamily.trim()
@@ -80,6 +87,7 @@ export function normalizeSettings(raw: Partial<AppSettings> | null | undefined):
     : DEFAULT_SETTINGS.editorFontSize;
   return {
     theme,
+    uiStyle,
     editorFontFamily: fontFamily,
     editorFontSize,
     keybindings: normalizeKeybindings(raw?.keybindings),

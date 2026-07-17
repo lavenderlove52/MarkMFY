@@ -35,35 +35,30 @@ const state = toastState();
 .mm-toast {
   pointer-events: auto;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--mm-radius-sm);
   font-size: 13px;
   line-height: 1.4;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--mm-shadow-overlay);
   border: 1px solid var(--mm-color-border);
-  background: var(--mm-color-panel, var(--mm-color-bg));
+  background: var(--mm-color-surface-elevated);
   color: var(--mm-color-text);
   cursor: pointer;
   word-break: break-word;
 }
 
 .mm-toast--error {
-  border-color: #c44;
-  background: #fff5f5;
-  color: #8b1a1a;
+  border-color: var(--mm-color-danger);
+  background: var(--mm-color-danger-soft);
+  color: var(--mm-color-danger);
 }
 
 .mm-toast--success {
-  border-color: var(--mm-color-accent, #2a7);
+  border-color: var(--mm-color-success);
+  background: var(--mm-color-success-soft);
+  color: var(--mm-color-success);
 }
 
 .mm-toast--info {
   opacity: 0.98;
-}
-
-:root.dark .mm-toast--error,
-html[data-theme="dark"] .mm-toast--error {
-  background: #3a1a1a;
-  color: #ffb4b4;
-  border-color: #a44;
 }
 </style>

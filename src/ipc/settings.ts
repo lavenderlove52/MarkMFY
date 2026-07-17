@@ -5,9 +5,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export type ThemeMode = "light" | "dark";
+export type UiStyle = "classic" | "fresh";
 
 export interface AppSettings {
   theme: ThemeMode;
+  uiStyle?: UiStyle;
   editorFontFamily: string;
   editorFontSize: number;
   keybindings?: Record<string, string>;

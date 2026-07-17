@@ -154,13 +154,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 26px;
-  padding: 2px 8px;
+  min-height: 30px;
+  padding: 3px 8px;
   border-radius: var(--mm-radius-sm);
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
   color: var(--mm-color-text);
+  transition: background var(--mm-duration-fast, 120ms) var(--mm-ease-standard, ease-out);
 }
 
 .file-tree__row:hover {
@@ -172,9 +173,10 @@ onBeforeUnmount(() => {
 }
 
 .file-tree__row--active {
-  background: var(--mm-color-active);
-  color: var(--mm-color-accent);
+  background: var(--mm-color-selection, var(--mm-color-active));
+  color: var(--mm-color-text);
   font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--mm-color-accent);
 }
 
 .file-tree__icon {

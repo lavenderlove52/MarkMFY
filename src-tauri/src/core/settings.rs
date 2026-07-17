@@ -11,6 +11,9 @@ use std::path::Path;
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: String,
+    /// classic=原版；fresh=清新（默认）
+    #[serde(default = "default_ui_style")]
+    pub ui_style: String,
     pub editor_font_family: String,
     pub editor_font_size: u32,
     #[serde(default)]
@@ -50,10 +53,15 @@ fn default_last_background_color() -> String {
     "#fef3c7".into()
 }
 
+fn default_ui_style() -> String {
+    "fresh".into()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "light".into(),
+            ui_style: default_ui_style(),
             editor_font_family: "\"Segoe UI\", system-ui, -apple-system, sans-serif".into(),
             editor_font_size: 15,
             keybindings: HashMap::new(),
@@ -75,6 +83,12 @@ impl AppSettings {
             "dark".into()
         } else {
             "light".into()
+        };
+        let ui = self.ui_style.to_lowercase();
+        self.ui_style = if ui == "classic" {
+            "classic".into()
+        } else {
+            "fresh".into()
         };
         if self.editor_font_family.trim().is_empty() {
             self.editor_font_family = Self::default().editor_font_family;
@@ -193,6 +207,7 @@ mod tests {
     fn normalize_clamps_font_size_and_theme() {
         let s = AppSettings {
             theme: "DARK".into(),
+            ui_style: "CLASSIC".into(),
             editor_font_family: "".into(),
             editor_font_size: 99,
             keybindings: HashMap::new(),
@@ -206,6 +221,7 @@ mod tests {
         }
         .normalize();
         assert_eq!(s.theme, "dark");
+        assert_eq!(s.ui_style, "classic");
         assert_eq!(s.editor_font_size, 28);
         assert!(!s.editor_font_family.is_empty());
         assert_eq!(s.last_workspace_path, "D:\\notes");

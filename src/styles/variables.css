@@ -1,52 +1,90 @@
 /**
- * 全局样式与主题 CSS 变量。
- * 运行时由 theme 模块根据 settings 覆盖这些默认值。
+ * 全局样式与主题 CSS 变量默认值（清新浅色）。
+ * 运行时由 theme 模块根据 settings.theme + settings.uiStyle 覆盖。
  */
 :root {
-  --mm-color-bg: #fbfbfe;
-  --mm-color-bg-muted: #f1f1f8;
-  --mm-color-text: #1c1d2b;
-  --mm-color-text-muted: #6b6d85;
-  --mm-color-border: rgba(32, 34, 66, 0.1);
-  --mm-color-accent: #6d5ef8;
-  --mm-color-accent-hover: #5a47ef;
-  --mm-color-accent-soft: rgba(109, 94, 248, 0.12);
-  --mm-color-panel: #ffffff;
-  --mm-color-surface: #ffffff;
+  --mm-color-bg: #f5f7f8;
+  --mm-color-bg-muted: #eef2f3;
+  --mm-color-sidebar: #eef2f3;
+  --mm-color-editor: #fcfcfa;
+  --mm-color-text: #202629;
+  --mm-color-text-muted: #5e686d;
+  --mm-color-text-tertiary: #879196;
+  --mm-color-border: #dde3e5;
+  --mm-color-border-strong: #c8d1d4;
+  --mm-color-accent: #3f6f8f;
+  --mm-color-accent-hover: #315c79;
+  --mm-color-accent-active: #274b64;
+  --mm-color-accent-soft: rgba(63, 111, 143, 0.12);
+  --mm-color-panel: #eef2f3;
+  --mm-color-surface: #f8fafa;
   --mm-color-surface-elevated: #ffffff;
-  --mm-color-hover: rgba(32, 34, 66, 0.05);
-  --mm-color-active: rgba(109, 94, 248, 0.14);
-  --mm-color-danger: #e5484d;
-  --mm-color-danger-soft: rgba(229, 72, 77, 0.1);
-  --mm-color-success: #189a67;
-  --mm-color-success-soft: rgba(24, 154, 103, 0.12);
-  --mm-syntax-keyword: #883e8c;
-  --mm-syntax-atom: #a3690a;
-  --mm-syntax-literal: #005b94;
-  --mm-syntax-string: #a6440a;
-  --mm-syntax-type: #0e7f82;
-  --mm-syntax-comment: #6b6d85;
-  --mm-syntax-meta: #6b6d85;
-  --mm-shadow-panel: 0 1px 2px rgba(24, 24, 55, 0.06);
-  --mm-shadow-overlay: 0 20px 60px rgba(24, 24, 55, 0.2);
+  --mm-color-hover: #e4eaeb;
+  --mm-color-active: #d8e3e5;
+  --mm-color-selection: #d9e8f0;
+  --mm-color-focus-ring: #7ba5bd;
+  --mm-color-danger: #a34f50;
+  --mm-color-danger-soft: rgba(163, 79, 80, 0.12);
+  --mm-color-success: #5f8872;
+  --mm-color-success-soft: rgba(95, 136, 114, 0.14);
+  --mm-color-warning: #a8752c;
+  --mm-color-warning-soft: rgba(168, 117, 44, 0.14);
+  --mm-syntax-keyword: #6b4e8c;
+  --mm-syntax-atom: #a8752c;
+  --mm-syntax-literal: #315c79;
+  --mm-syntax-string: #9a5b2f;
+  --mm-syntax-type: #3d7a6a;
+  --mm-syntax-comment: #879196;
+  --mm-syntax-meta: #879196;
+  --mm-shadow-panel: 0 1px 2px rgba(32, 38, 41, 0.05);
+  --mm-shadow-overlay: 0 16px 48px rgba(32, 38, 41, 0.14);
   --mm-radius-sm: 6px;
-  --mm-radius-md: 10px;
-  --mm-radius-lg: 14px;
+  --mm-radius-md: 8px;
+  --mm-radius-lg: 10px;
   --mm-space-xs: 4px;
   --mm-space-sm: 8px;
   --mm-space-md: 12px;
   --mm-space-lg: 16px;
   --mm-space-xl: 24px;
-  --mm-ui-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif;
+  --mm-duration-fast: 120ms;
+  --mm-duration-normal: 160ms;
+  --mm-ease-standard: ease-out;
+  --mm-ui-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "微软雅黑",
+    "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
   --mm-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
-  --mm-editor-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif;
+  --mm-editor-font-family: "Segoe UI", "Microsoft YaHei UI", "微软雅黑", "PingFang SC", system-ui,
+    sans-serif;
   --mm-editor-font-size: 16px;
-  --mm-editor-line-height: 1.72;
-  --mm-editor-content-width: 980px;
+  --mm-editor-line-height: 1.8;
+  --mm-editor-content-width: 820px;
 }
 
 html,
 body {
   color: var(--mm-color-text);
   background: var(--mm-color-bg);
+}
+
+/* 滚动条：低存在感，hover 增强 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mm-color-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--mm-color-border);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--mm-color-border-strong);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
 }

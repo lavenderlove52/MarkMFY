@@ -8,5 +8,6 @@ export {
   normalizeSettings,
   type AppSettings,
   type ThemeMode,
+  type UiStyle,
 } from "./types";
 export { default as SettingsPanel } from "./components/SettingsPanel.vue";

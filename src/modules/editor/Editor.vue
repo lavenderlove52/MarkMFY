@@ -283,16 +283,16 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--mm-color-bg);
+  background: var(--mm-color-editor, var(--mm-color-bg));
 }
 
 .mm-editor-error {
   flex: none;
   padding: 6px 12px;
-  background: #fff3cd;
-  color: #664d03;
+  background: var(--mm-color-warning-soft);
+  color: var(--mm-color-warning);
   font-size: 12px;
-  border-bottom: 1px solid #ffe69c;
+  border-bottom: 1px solid var(--mm-color-border);
 }
 
 .mm-editor-fallback {
@@ -301,12 +301,12 @@ onBeforeUnmount(() => {
   border: none;
   outline: none;
   resize: none;
-  padding: 24px 32px;
+  padding: 28px 44px 56px;
   font-family: var(--mm-editor-font-family);
   font-size: var(--mm-editor-font-size);
   line-height: var(--mm-editor-line-height);
   color: var(--mm-color-text);
-  background: var(--mm-color-bg);
+  background: var(--mm-color-editor, var(--mm-color-bg));
 }
 
 .mm-editor {
@@ -332,10 +332,9 @@ onBeforeUnmount(() => {
   max-width: var(--mm-editor-content-width);
   min-height: 100%;
   margin: 0 auto;
-  padding: 28px 44px 56px;
+  padding: 32px 48px 64px;
   caret-color: var(--mm-color-text);
-  background: var(--mm-color-surface);
-  box-shadow: var(--mm-shadow-panel);
+  background: transparent;
 }
 
 .mm-editor :deep(.cm-line) {
@@ -343,16 +342,21 @@ onBeforeUnmount(() => {
 }
 
 .mm-editor :deep(.cm-activeLine) {
-  background: transparent;
+  background: color-mix(in srgb, var(--mm-color-hover) 55%, transparent);
+}
+
+.mm-editor :deep(.cm-selectionBackground),
+.mm-editor :deep(.cm-content ::selection) {
+  background: var(--mm-color-selection, var(--mm-color-accent-soft)) !important;
 }
 
 .mm-editor :deep(.cm-cursor) {
-  border-left-color: var(--mm-color-text);
+  border-left-color: var(--mm-color-accent);
 }
 
 .mm-editor :deep(.cm-gutters) {
-  background: var(--mm-color-bg-muted);
-  color: var(--mm-color-text-muted);
+  background: var(--mm-color-editor, var(--mm-color-bg-muted));
+  color: var(--mm-color-text-tertiary, var(--mm-color-text-muted));
   border-right: 1px solid var(--mm-color-border);
 }
 </style>
