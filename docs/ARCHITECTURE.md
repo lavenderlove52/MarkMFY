@@ -76,6 +76,19 @@ graph TD
 
 模块内部用组件+局部 store/composable；跨模块优先通过 Command 的事件机制解耦；前端到 Rust 统一走 ipc 层，禁止绕过封装直接深度耦合。
 
+### 扩展点与稳定导出（V1.0）
+
+未来插件/扩展**只准**通过各模块 `index.ts` 的公开 API 接入，禁止深路径 import 模块内部文件。本期不实现插件加载器或沙箱（见 PRODUCT「不做什么」）。
+
+| 模块 | 稳定扩展面（摘要） |
+|------|-------------------|
+| **Editor** | `Editor` / `FormatToolbar` 组件；选区跳转/替换桥；格式桥（`runFormatCommand` / `hasActiveEditorView` / `isMarkdownPath`） |
+| **FileSystem** | `useWorkspaceStore` / `FileTree`；`getWorkspaceRootPath`；`readWorkspaceFile` / `writeWorkspaceFile` / `listWorkspaceDir` |
+| **Command** | `registerCommand` / `executeCommand` / `listCommands` 与快捷键 API；内建命令 id 见 `command/index.ts` JSDoc |
+| **IPC** | `src/ipc/` 仍是前端→Rust 唯一出口；`normalizeInvokeError` 为统一错误归一 |
+
+新增业务能力：优先新增 `src/modules/<name>/` + 对应 `commands/`，并向 Command 注册，而不是改已有模块内部实现。
+
 ## 技术选型
 
 - **Tauri v2**：Rust 后端 + 系统原生 WebView（Win 用 WebView2，Mac 用 WKWebView），相比 Electron 包体积小、内存低，本地文件访问原生便捷，天然支持 Win/Mac 双端。

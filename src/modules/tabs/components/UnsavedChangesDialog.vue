@@ -29,7 +29,8 @@ const emit = defineEmits<{
 .unsaved-dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -37,12 +38,13 @@ const emit = defineEmits<{
 }
 
 .unsaved-dialog {
-  background: var(--mm-color-bg, #fff);
-  color: var(--mm-color-text, #1f1f1f);
-  border-radius: 8px;
+  background: var(--mm-color-surface-elevated);
+  color: var(--mm-color-text);
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-lg);
   padding: 20px 24px;
   min-width: 320px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--mm-shadow-overlay);
 }
 
 .unsaved-dialog__message {
@@ -59,16 +61,17 @@ const emit = defineEmits<{
 
 .unsaved-dialog__btn {
   padding: 6px 14px;
-  border-radius: 4px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  background: transparent;
+  border-radius: var(--mm-radius-sm);
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-text);
   cursor: pointer;
   font-size: 13px;
 }
 
 .unsaved-dialog__btn--primary {
-  background: #396cd8;
+  background: var(--mm-color-accent);
   color: #fff;
-  border-color: #396cd8;
+  border-color: var(--mm-color-accent);
 }
 </style>

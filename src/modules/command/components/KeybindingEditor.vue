@@ -96,7 +96,7 @@ function inputValue(id: string, defaultShortcut: string): string {
 .mm-kb__hint {
   margin: 0 0 10px;
   font-size: 11px;
-  color: var(--mm-color-text-muted, #666);
+  color: var(--mm-color-text-muted);
 }
 
 .mm-kb__row {
@@ -126,20 +126,26 @@ function inputValue(id: string, defaultShortcut: string): string {
 .mm-kb__input {
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.15));
-  background: var(--mm-color-bg, #fff);
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-surface);
   color: inherit;
-  border-radius: 4px;
-  padding: 4px 6px;
+  border-radius: var(--mm-radius-sm);
+  padding: 5px 7px;
   font-size: 12px;
+  outline: none;
+}
+
+.mm-kb__input:focus {
+  border-color: var(--mm-color-accent);
+  box-shadow: 0 0 0 3px var(--mm-color-accent-soft);
 }
 
 .mm-kb__reset {
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.15));
-  background: transparent;
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-surface);
   color: inherit;
-  border-radius: 4px;
-  padding: 3px 8px;
+  border-radius: var(--mm-radius-sm);
+  padding: 4px 8px;
   font-size: 11px;
   cursor: pointer;
 }
@@ -147,6 +153,6 @@ function inputValue(id: string, defaultShortcut: string): string {
 .mm-kb__err {
   grid-column: 1 / -1;
   font-size: 11px;
-  color: var(--mm-color-danger, #cf222e);
+  color: var(--mm-color-danger);
 }
 </style>

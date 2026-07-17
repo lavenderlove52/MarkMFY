@@ -42,21 +42,21 @@ function shortHash(hash: string): string {
 .commit-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 6px;
 }
 
 .commit-list__item {
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: var(--mm-radius-sm);
   cursor: pointer;
 }
 
 .commit-list__item:hover {
-  background: var(--mm-color-hover, rgba(0, 0, 0, 0.04));
+  background: var(--mm-color-hover);
 }
 
 .commit-list__item--active {
-  background: var(--mm-color-active, rgba(0, 0, 0, 0.08));
+  background: var(--mm-color-active);
 }
 
 .commit-list__message {
@@ -69,6 +69,7 @@ function shortHash(hash: string): string {
   display: flex;
   gap: 8px;
   font-size: 11px;
-  color: #888;
+  color: var(--mm-color-text-muted);
+  overflow: hidden;
 }
 </style>

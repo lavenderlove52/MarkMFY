@@ -17,9 +17,26 @@ export interface RegisterCommandsOptions {
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
   isCommandPaletteOpen: () => boolean;
+  openSearch: (mode: "file" | "workspace") => void;
 }
 
 let registered = false;
+
+function getActiveExportInput(): {
+  markdown: string;
+  title: string;
+  filePath: string;
+} | null {
+  const tabsStore = useTabsStore();
+  tabsStore.materializeActiveContent();
+  const tab = tabsStore.activeTab;
+  if (!tab) return null;
+  return {
+    markdown: tab.content,
+    title: tab.fileName.replace(/\.md$/i, "") || tab.fileName,
+    filePath: tab.filePath,
+  };
+}
 
 /** 注册应用内建命令（幂等：重复调用会覆盖同 id）。 */
 export function registerAppCommands(options: RegisterCommandsOptions): void {
@@ -50,6 +67,33 @@ export function registerAppCommands(options: RegisterCommandsOptions): void {
     defaultShortcut: "Mod-o",
     run: async () => {
       await workspaceStore.openFolder();
+    },
+  });
+
+  registerCommand({
+    id: "workspace.newFile",
+    title: "新建 Markdown 文件",
+    subtitle: "在当前选中目录或工作区根目录",
+    keywords: ["new", "file", "markdown", "新建", "文件"],
+    when: () => workspaceStore.isOpen,
+    run: async () => {
+      const name = window.prompt("新建 Markdown 文件名（可省略 .md）", "未命名");
+      if (name === null) return;
+      const path = await workspaceStore.createMarkdownFile(name.trim() || null);
+      if (path) await tabsStore.openFile(path);
+    },
+  });
+
+  registerCommand({
+    id: "workspace.newFolder",
+    title: "新建文件夹",
+    subtitle: "在当前选中目录或工作区根目录",
+    keywords: ["new", "folder", "mkdir", "新建", "文件夹"],
+    when: () => workspaceStore.isOpen,
+    run: async () => {
+      const name = window.prompt("新建文件夹名称", "新建文件夹");
+      if (name === null) return;
+      await workspaceStore.createFolder(name.trim() || null);
     },
   });
 
@@ -111,6 +155,53 @@ export function registerAppCommands(options: RegisterCommandsOptions): void {
     run: async () => {
       if (!workspaceStore.rootPath) return;
       await gitStore.commit(workspaceStore.rootPath);
+    },
+  });
+
+  registerCommand({
+    id: "export.html",
+    title: "导出为 HTML",
+    keywords: ["export", "html", "导出"],
+    when: () => !!tabsStore.activeTab,
+    run: async () => {
+      const input = getActiveExportInput();
+      if (!input) return;
+      const { exportHtmlFile } = await import("./modules/export");
+      await exportHtmlFile(input);
+    },
+  });
+
+  registerCommand({
+    id: "export.pdf",
+    title: "导出为 PDF（打印）",
+    subtitle: "打开系统打印对话框，可选择 Print to PDF",
+    keywords: ["export", "pdf", "print", "导出", "打印"],
+    when: () => !!tabsStore.activeTab,
+    run: async () => {
+      const input = getActiveExportInput();
+      if (!input) return;
+      const { exportPdfViaPrint } = await import("./modules/export");
+      await exportPdfViaPrint(input);
+    },
+  });
+
+  registerCommand({
+    id: "search.open",
+    title: "在当前文件中查找",
+    keywords: ["search", "find", "查找", "搜索"],
+    defaultShortcut: "Mod-f",
+    run: () => {
+      options.openSearch("file");
+    },
+  });
+
+  registerCommand({
+    id: "search.openWorkspace",
+    title: "在工作区中搜索",
+    keywords: ["search", "workspace", "全局", "搜索"],
+    defaultShortcut: "Mod-Shift-f",
+    run: () => {
+      options.openSearch("workspace");
     },
   });
 

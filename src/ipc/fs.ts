@@ -22,6 +22,16 @@ export function writeFile(filePath: string, content: string): Promise<void> {
   return invoke<void>("fs_write_file", { filePath, content });
 }
 
+/** 创建新文件；若路径已存在则失败。 */
+export function createFile(filePath: string, content = ""): Promise<void> {
+  return invoke<void>("fs_create_file", { filePath, content });
+}
+
+/** 创建新目录；若路径已存在则失败。 */
+export function createDir(dirPath: string): Promise<void> {
+  return invoke<void>("fs_create_dir", { dirPath });
+}
+
 /**
  * 保存粘贴/拖拽的图片二进制数据到 markdown 文件同级的 assets 目录，返回相对路径。
  */

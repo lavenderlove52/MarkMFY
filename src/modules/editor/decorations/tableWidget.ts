@@ -292,7 +292,9 @@ export class TableWidget extends WidgetType {
         });
         content.addEventListener("blur", () => {
           window.setTimeout(() => {
-            if (document.activeElement && wrap.contains(document.activeElement)) return;
+            // 仅当焦点仍在本单元格内（如点到列/行拖拽柄）才跳过提交。
+            // 原先用 wrap.contains 会在「点到同表另一格」时误判，导致上一格 --editing 样式残留。
+            if (document.activeElement && el.contains(document.activeElement)) return;
             commit();
           }, 0);
         });
@@ -474,7 +476,20 @@ export class TableWidget extends WidgetType {
       });
     }
 
+    // 拖拽改列宽/行高、单元格直编换行都只改 DOM，不经过主文档事务；
+    // 主编辑器缓存的块高度不会自动感知，必须显式 requestMeasure，
+    // 否则点击表格下方内容会命中错误的行（CM6 对动态 widget 的硬性要求）。
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => view.requestMeasure());
+      ro.observe(wrap);
+      (wrap as HTMLElement & { __mmCleanup?: () => void }).__mmCleanup = () => ro.disconnect();
+    }
+
     return wrap;
+  }
+
+  destroy(dom: HTMLElement): void {
+    (dom as HTMLElement & { __mmCleanup?: () => void }).__mmCleanup?.();
   }
 
   ignoreEvent(): boolean {

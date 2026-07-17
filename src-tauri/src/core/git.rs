@@ -1,7 +1,7 @@
 //! Git 相关的纯业务逻辑（基于 git2/libgit2），不依赖 tauri，方便单测。
 
 use crate::error::AppError;
-use git2::{BranchType, DiffOptions, Repository, Status, StatusOptions};
+use git2::{BranchType, DiffOptions, Repository, RepositoryState, Status, StatusOptions};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,8 @@ pub struct GitFileStatus {
 pub struct GitStatusResult {
     pub is_repo: bool,
     pub files: Vec<GitFileStatus>,
+    /// 是否处于 merge / cherry-pick / revert 等需解决冲突的状态
+    pub merge_in_progress: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -45,8 +47,21 @@ pub struct BranchInfo {
     pub is_head: bool,
 }
 
+const MAX_DIFF_LINES: usize = 20_000;
+const MAX_LOG_LIMIT: usize = 500;
+const DIFF_TRUNCATED_MESSAGE: &str = "... diff 过大，已截断后续内容 ...";
+
 fn open_repo(workspace_path: &str) -> Result<Repository, AppError> {
     Repository::discover(workspace_path).map_err(|e| AppError::new(e.to_string()))
+}
+
+fn push_truncated_diff_line(lines: &mut Vec<DiffLine>) {
+    lines.push(DiffLine {
+        origin: " ".to_string(),
+        content: DIFF_TRUNCATED_MESSAGE.to_string(),
+        old_lineno: None,
+        new_lineno: None,
+    });
 }
 
 fn relative_path(workdir: &Path, file_path: &str) -> Result<PathBuf, AppError> {
@@ -72,6 +87,12 @@ fn relative_path(workdir: &Path, file_path: &str) -> Result<PathBuf, AppError> {
 /// 因为同一个文件可能同时存在"已暂存的修改"和"未暂存的新修改"。
 fn classify_status(s: Status) -> Vec<(bool, String)> {
     let mut result = Vec::new();
+
+    // 冲突文件优先单独标出，避免再拆成 modified 造成面板误导
+    if s.contains(Status::CONFLICTED) {
+        result.push((false, "conflicted".to_string()));
+        return result;
+    }
 
     if s.contains(Status::INDEX_NEW) {
         result.push((true, "new".to_string()));
@@ -100,6 +121,17 @@ fn classify_status(s: Status) -> Vec<(bool, String)> {
     result
 }
 
+fn merge_in_progress(repo: &Repository) -> bool {
+    matches!(
+        repo.state(),
+        RepositoryState::Merge
+            | RepositoryState::Revert
+            | RepositoryState::RevertSequence
+            | RepositoryState::CherryPick
+            | RepositoryState::CherryPickSequence
+    )
+}
+
 /// 检测工作区是否是 git 仓库，并返回改动文件列表（区分已暂存/未暂存）。
 pub fn status(workspace_path: &str) -> Result<GitStatusResult, AppError> {
     let repo = match Repository::discover(workspace_path) {
@@ -108,6 +140,7 @@ pub fn status(workspace_path: &str) -> Result<GitStatusResult, AppError> {
             return Ok(GitStatusResult {
                 is_repo: false,
                 files: vec![],
+                merge_in_progress: false,
             })
         }
     };
@@ -133,6 +166,7 @@ pub fn status(workspace_path: &str) -> Result<GitStatusResult, AppError> {
     Ok(GitStatusResult {
         is_repo: true,
         files,
+        merge_in_progress: merge_in_progress(&repo),
     })
 }
 
@@ -153,6 +187,12 @@ pub fn diff_file(workspace_path: &str, file_path: &str, staged: bool) -> Result<
 
     let mut lines = Vec::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        if lines.len() >= MAX_DIFF_LINES {
+            if lines.len() == MAX_DIFF_LINES {
+                push_truncated_diff_line(&mut lines);
+            }
+            return false;
+        }
         let origin = line.origin();
         if matches!(origin, '+' | '-' | ' ') {
             let content = String::from_utf8_lossy(line.content())
@@ -249,6 +289,7 @@ pub fn commit(workspace_path: &str, message: &str) -> Result<String, AppError> {
 /// 查询 commit 历史（从 HEAD 开始，最多 `limit` 条）。
 pub fn log(workspace_path: &str, limit: usize) -> Result<Vec<CommitInfo>, AppError> {
     let repo = open_repo(workspace_path)?;
+    let limit = limit.min(MAX_LOG_LIMIT);
     let mut revwalk = repo.revwalk().map_err(|e| AppError::new(e.to_string()))?;
     if revwalk.push_head().is_err() {
         return Ok(vec![]);
@@ -292,6 +333,12 @@ pub fn commit_diff(workspace_path: &str, commit_hash: &str) -> Result<Vec<DiffLi
 
     let mut lines = Vec::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        if lines.len() >= MAX_DIFF_LINES {
+            if lines.len() == MAX_DIFF_LINES {
+                push_truncated_diff_line(&mut lines);
+            }
+            return false;
+        }
         let origin = line.origin();
         if matches!(origin, '+' | '-' | ' ') {
             let content = String::from_utf8_lossy(line.content())
@@ -357,4 +404,34 @@ pub fn checkout(workspace_path: &str, branch_name: &str) -> Result<(), AppError>
     .map_err(|e| AppError::new(e.to_string()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_conflicted_takes_priority() {
+        let rows = classify_status(Status::CONFLICTED | Status::WT_MODIFIED);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], (false, "conflicted".to_string()));
+    }
+
+    #[test]
+    fn classify_modified_unstaged() {
+        let rows = classify_status(Status::WT_MODIFIED);
+        assert_eq!(rows, vec![(false, "modified".to_string())]);
+    }
+
+    #[test]
+    fn classify_staged_and_unstaged() {
+        let rows = classify_status(Status::INDEX_MODIFIED | Status::WT_MODIFIED);
+        assert_eq!(
+            rows,
+            vec![
+                (true, "modified".to_string()),
+                (false, "modified".to_string())
+            ]
+        );
+    }
 }

@@ -64,12 +64,52 @@ pub fn write_file(file_path: &str, content: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 创建空文件；若已存在则报错（避免覆盖）。
+pub fn create_file(file_path: &str, content: &str) -> Result<(), AppError> {
+    let path = Path::new(file_path);
+    if path.exists() {
+        return Err(AppError::new(format!("已存在：{}", file_path)));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(AppError::new(format!(
+                "父目录不存在：{}",
+                parent.display()
+            )));
+        }
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
+/// 创建空目录；若已存在则报错。
+pub fn create_dir(dir_path: &str) -> Result<(), AppError> {
+    let path = Path::new(dir_path);
+    if path.exists() {
+        return Err(AppError::new(format!("已存在：{}", dir_path)));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.is_dir() {
+            return Err(AppError::new(format!(
+                "父目录无效：{}",
+                parent.display()
+            )));
+        }
+    }
+    fs::create_dir(path)?;
+    Ok(())
+}
+
 /// 将图片二进制数据保存到指定 markdown 文件同级的 assets 目录，返回相对路径。
 pub fn save_pasted_image(
     markdown_file_path: &str,
     file_name: &str,
     data: &[u8],
 ) -> Result<String, AppError> {
+    let name = file_name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return Err(AppError::new("图片文件名不合法"));
+    }
     let md_path = Path::new(markdown_file_path);
     let parent = md_path
         .parent()
@@ -77,10 +117,10 @@ pub fn save_pasted_image(
     let assets_dir = parent.join("assets");
     fs::create_dir_all(&assets_dir)?;
 
-    let target_path = assets_dir.join(file_name);
+    let target_path = assets_dir.join(name);
     fs::write(&target_path, data)?;
 
-    Ok(format!("assets/{}", file_name))
+    Ok(format!("assets/{}", name))
 }
 
 #[cfg(test)]
@@ -130,6 +170,37 @@ mod tests {
         let read = read_file(file.to_str().unwrap()).unwrap();
         assert!(!read.contains('\r'));
         assert!(read.contains("| a | b |\n| --- | --- |\n"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_file_and_dir_ok() {
+        let dir = temp_dir("create");
+        let sub = dir.join("notes");
+        create_dir(sub.to_str().unwrap()).unwrap();
+        assert!(sub.is_dir());
+        let file = sub.join("a.md");
+        create_file(file.to_str().unwrap(), "# hi\n").unwrap();
+        assert_eq!(read_file(file.to_str().unwrap()).unwrap(), "# hi\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_file_rejects_existing() {
+        let dir = temp_dir("create_exist");
+        let file = dir.join("a.md");
+        create_file(file.to_str().unwrap(), "").unwrap();
+        assert!(create_file(file.to_str().unwrap(), "").is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_path_like_file_name() {
+        let dir = temp_dir("image_name");
+        let file = dir.join("a.md");
+        create_file(file.to_str().unwrap(), "").unwrap();
+        assert!(save_pasted_image(file.to_str().unwrap(), "../bad.png", b"img").is_err());
+        assert!(save_pasted_image(file.to_str().unwrap(), "nested/bad.png", b"img").is_err());
         let _ = fs::remove_dir_all(dir);
     }
 }

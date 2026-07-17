@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { readFile, writeFile } from "../../ipc";
+import { showToast, toastError } from "../../notify";
 import { readActiveTabContent } from "./contentBridge";
 import type { TabItem } from "./types";
 
@@ -29,17 +30,21 @@ export const useTabsStore = defineStore("tabs", {
         this.activeTabId = existing.id;
         return;
       }
-      const content = (await readFile(filePath)).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      const tab: TabItem = {
-        id: filePath,
-        filePath,
-        fileName: fileNameFromPath(filePath),
-        content,
-        originalContent: content,
-        isDirty: false,
-      };
-      this.tabs.push(tab);
-      this.activeTabId = tab.id;
+      try {
+        const content = await readFile(filePath);
+        const tab: TabItem = {
+          id: filePath,
+          filePath,
+          fileName: fileNameFromPath(filePath),
+          content,
+          originalContent: content,
+          isDirty: false,
+        };
+        this.tabs.push(tab);
+        this.activeTabId = tab.id;
+      } catch (err) {
+        toastError(err, "打开文件失败");
+      }
     },
 
     setActive(tabId: string): void {
@@ -83,9 +88,14 @@ export const useTabsStore = defineStore("tabs", {
       }
       const tab = this.tabs.find((t) => t.id === tabId);
       if (!tab) return;
-      await writeFile(tab.filePath, tab.content);
-      tab.originalContent = tab.content;
-      tab.isDirty = false;
+      try {
+        await writeFile(tab.filePath, tab.content);
+        tab.originalContent = tab.content;
+        tab.isDirty = false;
+        showToast("已保存", "success", 2000);
+      } catch (err) {
+        toastError(err, "保存失败");
+      }
     },
 
     /** 放弃未保存修改，恢复为打开时 / 上次保存内容。 */

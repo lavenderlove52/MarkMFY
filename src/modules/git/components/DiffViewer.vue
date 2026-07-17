@@ -30,14 +30,14 @@ defineProps<{
 .diff-viewer {
   height: 100%;
   overflow: auto;
-  background: var(--mm-color-bg, #fff);
+  background: var(--mm-color-surface);
   font-family: var(--mm-font-mono, Consolas, monospace);
   font-size: 12px;
 }
 
 .diff-viewer__empty {
   padding: 16px;
-  color: #888;
+  color: var(--mm-color-text-muted);
 }
 
 .diff-viewer__body {
@@ -48,17 +48,17 @@ defineProps<{
 
 .diff-viewer__line {
   display: block;
-  padding: 0 8px;
-  line-height: 1.5;
+  padding: 0 10px;
+  line-height: 1.55;
 }
 
 .diff-viewer__line--add {
-  background: rgba(46, 160, 67, 0.15);
-  color: #1a7f37;
+  background: var(--mm-color-success-soft);
+  color: var(--mm-color-success);
 }
 
 .diff-viewer__line--del {
-  background: rgba(248, 81, 73, 0.15);
-  color: #cf222e;
+  background: var(--mm-color-danger-soft);
+  color: var(--mm-color-danger);
 }
 </style>

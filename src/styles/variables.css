@@ -3,16 +3,46 @@
  * 运行时由 theme 模块根据 settings 覆盖这些默认值。
  */
 :root {
-  --mm-color-bg: #ffffff;
-  --mm-color-bg-muted: #f6f7f9;
-  --mm-color-text: #1f1f1f;
-  --mm-color-text-muted: #666666;
-  --mm-color-border: rgba(0, 0, 0, 0.12);
-  --mm-color-accent: #396cd8;
+  --mm-color-bg: #fbfbfe;
+  --mm-color-bg-muted: #f1f1f8;
+  --mm-color-text: #1c1d2b;
+  --mm-color-text-muted: #6b6d85;
+  --mm-color-border: rgba(32, 34, 66, 0.1);
+  --mm-color-accent: #6d5ef8;
+  --mm-color-accent-hover: #5a47ef;
+  --mm-color-accent-soft: rgba(109, 94, 248, 0.12);
   --mm-color-panel: #ffffff;
-  --mm-color-danger: #cf222e;
-  --mm-editor-font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  --mm-editor-font-size: 15px;
+  --mm-color-surface: #ffffff;
+  --mm-color-surface-elevated: #ffffff;
+  --mm-color-hover: rgba(32, 34, 66, 0.05);
+  --mm-color-active: rgba(109, 94, 248, 0.14);
+  --mm-color-danger: #e5484d;
+  --mm-color-danger-soft: rgba(229, 72, 77, 0.1);
+  --mm-color-success: #189a67;
+  --mm-color-success-soft: rgba(24, 154, 103, 0.12);
+  --mm-syntax-keyword: #883e8c;
+  --mm-syntax-atom: #a3690a;
+  --mm-syntax-literal: #005b94;
+  --mm-syntax-string: #a6440a;
+  --mm-syntax-type: #0e7f82;
+  --mm-syntax-comment: #6b6d85;
+  --mm-syntax-meta: #6b6d85;
+  --mm-shadow-panel: 0 1px 2px rgba(24, 24, 55, 0.06);
+  --mm-shadow-overlay: 0 20px 60px rgba(24, 24, 55, 0.2);
+  --mm-radius-sm: 6px;
+  --mm-radius-md: 10px;
+  --mm-radius-lg: 14px;
+  --mm-space-xs: 4px;
+  --mm-space-sm: 8px;
+  --mm-space-md: 12px;
+  --mm-space-lg: 16px;
+  --mm-space-xl: 24px;
+  --mm-ui-font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif;
+  --mm-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --mm-editor-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif;
+  --mm-editor-font-size: 16px;
+  --mm-editor-line-height: 1.72;
+  --mm-editor-content-width: 980px;
 }
 
 html,

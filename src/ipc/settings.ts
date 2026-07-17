@@ -11,6 +11,13 @@ export interface AppSettings {
   editorFontFamily: string;
   editorFontSize: number;
   keybindings?: Record<string, string>;
+  lastWorkspacePath?: string;
+  sidebarWidth?: number;
+  gitPanelWidth?: number;
+  sidebarOpen?: boolean;
+  gitPanelOpen?: boolean;
+  lastFontColor?: string;
+  lastBackgroundColor?: string;
 }
 
 export function loadSettings(): Promise<AppSettings> {

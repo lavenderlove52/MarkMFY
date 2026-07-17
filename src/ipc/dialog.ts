@@ -1,7 +1,7 @@
 /**
  * 系统对话框相关封装（基于 @tauri-apps/plugin-dialog）。
  */
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 /**
  * 弹出系统文件夹选择对话框，返回用户选择的文件夹路径；用户取消时返回 null。
@@ -12,4 +12,19 @@ export async function pickFolder(): Promise<string | null> {
     return null;
   }
   return result;
+}
+
+/**
+ * 弹出另存为对话框，返回路径；取消返回 null。
+ */
+export async function pickSaveFile(options: {
+  title?: string;
+  defaultPath?: string;
+  filters?: { name: string; extensions: string[] }[];
+}): Promise<string | null> {
+  return save({
+    title: options.title,
+    defaultPath: options.defaultPath,
+    filters: options.filters,
+  });
 }

@@ -70,9 +70,9 @@ function readSvgNaturalSize(svg: SVGSVGElement): { w: number; h: number } {
 
 /**
  * Mermaid 预览：
- * - 首次按画布宽度完整适配（zoom=1 时画布高度=图高，不留大片空白）
- * - 放大缩小只在固定画布内，溢出裁切
- * - 拦截 Ctrl+滚轮，避免浏览器整页缩放
+ * - 默认按编辑器当前可用宽高等比缩放，优先完整展示整张图
+ * - 放大缩小是相对适配态的倍率；放大后溢出可平移查看
+ * - 拦截 Ctrl+滚轮在画布内缩放
  */
 export class MermaidWidget extends WidgetType {
   private readonly prefs: MermaidViewPrefs;
@@ -107,7 +107,7 @@ export class MermaidWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("div");
     wrap.className = "mm-mermaid";
-    wrap.title = "滚轮缩放(Ctrl) · 拖拽平移 · 画布大小固定";
+    wrap.title = "字号一致 · 滚轮缩放(Ctrl) · 拖拽平移";
 
     // 使用文档里的相对 zoom；旧版绝对 scale 已在 normalize 时丢弃
     let prefs = normalizeMermaidPrefs(this.prefs);
@@ -144,19 +144,41 @@ export class MermaidWidget extends WidgetType {
 
     const displayScale = (): number => fitScale * prefs.zoom;
 
+    const availableViewportWidth = (): number => {
+      const scrollWidth = view.scrollDOM.clientWidth - 56;
+      const wrapWidth = wrap.clientWidth > 0 ? wrap.clientWidth : scrollWidth;
+      return Math.max(240, Math.min(scrollWidth, wrapWidth));
+    };
+
+    const availableViewportHeight = (): number => {
+      const editorHeight = view.scrollDOM.clientHeight - 120;
+      const windowHeight = window.innerHeight * 0.78;
+      return Math.max(160, Math.min(editorHeight, windowHeight, 1200));
+    };
+
     const clampPan = (): void => {
       const s = displayScale();
       const contentW = naturalW * s;
       const contentH = naturalH * s;
       const viewportW = Math.max(viewport.clientWidth, 1);
-      const minX = Math.min(0, viewportW - contentW);
-      const minY = Math.min(0, canvasH - contentH);
-      panX = Math.min(0, Math.max(minX, panX));
-      panY = Math.min(0, Math.max(minY, panY));
+
+      // 比画布小则居中；比画布大则可在范围内平移
+      if (contentW <= viewportW) {
+        panX = (viewportW - contentW) / 2;
+      } else {
+        const minX = viewportW - contentW;
+        panX = Math.min(0, Math.max(minX, panX));
+      }
+      if (contentH <= canvasH) {
+        panY = (canvasH - contentH) / 2;
+      } else {
+        const minY = canvasH - contentH;
+        panY = Math.min(0, Math.max(minY, panY));
+      }
     };
 
     const syncView = (opts?: { measure?: boolean }): void => {
-      // 画布宽度跟容器；高度=适应后图高。stage 绝对定位，不参与布局测量。
+      // 画布宽度跟容器；高度=min(图高, 上限)。stage 绝对定位，不参与布局测量。
       viewport.style.width = "100%";
       viewport.style.height = `${Math.max(48, canvasH)}px`;
       stage.style.width = `${Math.max(1, naturalW)}px`;
@@ -164,48 +186,30 @@ export class MermaidWidget extends WidgetType {
       clampPan();
       stage.style.transform = `translate(${panX}px, ${panY}px) scale(${displayScale()})`;
       status.textContent = `${Math.round(prefs.zoom * 100)}%`;
-      // 仅高度/适配变化时通知 CM；拖拽平移只改 transform，不必每帧 requestMeasure
       if (opts?.measure !== false) {
         view.requestMeasure();
       }
     };
 
-    /**
-     * 按「当前可视宽度」计算 fit，使整图完整铺满宽度；
-     * 画布高度 = 缩放后图高（不超过屏高的 70%）。
-     */
     const recomputeFit = (): void => {
-      // 优先用编辑器内容区宽度，避免 viewport 尚未布局时落到 240 把图缩成芝麻粒
-      const editorContentW = Math.max(
-        view.contentDOM?.clientWidth ?? 0,
-        view.dom?.clientWidth ?? 0,
-      );
-      const availW = Math.max(
-        viewport.clientWidth || wrap.clientWidth || editorContentW - 64 || 0,
-        320,
-      );
-      const maxH = Math.min(Math.round(window.innerHeight * 0.7), 720);
-
       if (naturalW < 2 || naturalH < 2) {
         fitScale = 1;
         canvasH = 120;
         return;
       }
 
-      fitScale = availW / naturalW;
-      let fittedH = naturalH * fitScale;
-      if (fittedH > maxH) {
-        fitScale = maxH / naturalH;
-        fittedH = maxH;
-      }
+      const maxW = availableViewportWidth();
+      const maxH = availableViewportHeight();
+      const nextFit = Math.min(1, maxW / naturalW, maxH / naturalH);
+      fitScale = Number.isFinite(nextFit) && nextFit > 0 ? nextFit : 1;
 
-      // 画布高度始终等于「适应宽度后的图高」，放大不撑高外框
-      canvasH = Math.max(48, Math.round(fittedH));
+      const scaledH = naturalH * displayScale();
+      canvasH = Math.max(48, Math.min(Math.ceil(scaledH), maxH));
     };
 
     const savePrefs = (): void => {
       if (!this.fenceText) return;
-      // 持久化用户相对 zoom（适应后的倍率），首次强制 zoom=1 不写脏数据
+      // 持久化相对 zoom；fit 由当前窗口实时计算，首次 zoom=1 不写脏数据
       persistMermaidPrefs(view, this.from, this.to, this.fenceText, prefs);
     };
 
@@ -232,10 +236,10 @@ export class MermaidWidget extends WidgetType {
       const contentY = (cy - panY) / Math.max(prev, 0.001);
 
       prefs = normalizeMermaidPrefs({ ...prefs, zoom: next });
+      recomputeFit();
       const nextScale = displayScale();
       panX = cx - contentX * nextScale;
       panY = cy - contentY * nextScale;
-      // 画布外框尺寸不变（仍用 fit 高度）
       syncView();
       scheduleSavePrefs();
     };
@@ -318,7 +322,7 @@ export class MermaidWidget extends WidgetType {
       createToolbarButton("字号+", () => {
         void setFontSize(prefs.fontSize + 2);
       }),
-      createToolbarButton("适应", () => {
+      createToolbarButton("复位", () => {
         prefs = normalizeMermaidPrefs({ ...prefs, zoom: 1 });
         panX = 0;
         panY = 0;
@@ -367,7 +371,10 @@ export class MermaidWidget extends WidgetType {
         setZoom(prefs.zoom + (e.deltaY > 0 ? -0.12 : 0.12));
         return;
       }
-      if (prefs.zoom > 1.01) {
+      const s = displayScale();
+      const overflow =
+        naturalW * s > viewport.clientWidth + 1 || naturalH * s > canvasH + 1;
+      if (overflow) {
         e.preventDefault();
         e.stopPropagation();
         panX -= e.deltaX;

@@ -19,6 +19,16 @@ pub fn fs_write_file(file_path: String, content: String) -> Result<(), AppError>
 }
 
 #[tauri::command]
+pub fn fs_create_file(file_path: String, content: String) -> Result<(), AppError> {
+    fs_core::create_file(&file_path, &content)
+}
+
+#[tauri::command]
+pub fn fs_create_dir(dir_path: String) -> Result<(), AppError> {
+    fs_core::create_dir(&dir_path)
+}
+
+#[tauri::command]
 pub fn fs_save_pasted_image(
     markdown_file_path: String,
     file_name: String,

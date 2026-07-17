@@ -1,6 +1,7 @@
 /**
- * Export 模块：导出为 PDF/HTML 的管线（markdown-it + Shiki）。
- * 依赖 editor 的内容。
- * 具体实现见 V0.8（Task034 及以后）。
+ * Export 模块：导出为 PDF/HTML（markdown-it + Shiki 管线）。
+ * 内容由调用方传入（通常来自 tabs），本模块不反向依赖其它业务 UI。
  */
-export {};
+export type { RenderMarkdownOptions, ExportKind } from "./types";
+export { renderMarkdownDocument } from "./renderHtml";
+export { exportHtmlFile, exportPdfViaPrint, type ExportDocumentInput } from "./exportActions";

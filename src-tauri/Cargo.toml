@@ -1,6 +1,6 @@
 [package]
 name = "markmfy"
-version = "0.1.0"
+version = "1.0.0"
 description = "个人轻量级 Markdown 编辑器"
 authors = ["MarkMFY"]
 edition = "2021"

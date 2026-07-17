@@ -6,7 +6,7 @@ import eslintConfigPrettier from "eslint-config-prettier";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "src-tauri/target/**", "node_modules/**", "src/vite-env.d.ts"],
+    ignores: ["dist/**", "src-tauri/target/**", "node_modules/**", "src/vite-env.d.ts", "scripts/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

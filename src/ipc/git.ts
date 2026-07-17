@@ -6,12 +6,14 @@ import { invoke } from "@tauri-apps/api/core";
 export interface GitFileStatus {
   path: string;
   staged: boolean;
-  kind: "new" | "modified" | "deleted" | "renamed" | "typechange";
+  kind: "new" | "modified" | "deleted" | "renamed" | "typechange" | "conflicted";
 }
 
 export interface GitStatusResult {
   isRepo: boolean;
   files: GitFileStatus[];
+  /** 合并 / cherry-pick / revert 进行中 */
+  mergeInProgress: boolean;
 }
 
 export interface DiffLine {

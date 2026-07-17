@@ -77,27 +77,46 @@ function onDialogCancel(): void {
 .tabs-bar {
   display: flex;
   overflow-x: auto;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-  background: var(--mm-color-bg, #fff);
+  gap: 4px;
+  padding: 7px 10px 0;
+  border-bottom: 1px solid var(--mm-color-border);
+  background: var(--mm-color-bg);
 }
 
 .tabs-bar__tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  max-width: 220px;
+  padding: 7px 10px;
   font-size: 13px;
   cursor: pointer;
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--mm-radius-sm) var(--mm-radius-sm) 0 0;
   white-space: nowrap;
+  color: var(--mm-color-text-muted);
+}
+
+.tabs-bar__tab:hover {
+  background: var(--mm-color-hover);
+  color: var(--mm-color-text);
 }
 
 .tabs-bar__tab--active {
-  background: var(--mm-color-active, rgba(0, 0, 0, 0.06));
+  border-color: var(--mm-color-border);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-text);
+  box-shadow: 0 -1px 0 var(--mm-color-surface) inset;
+}
+
+.tabs-bar__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tabs-bar__dirty-dot {
-  color: #396cd8;
+  color: var(--mm-color-accent);
   font-size: 10px;
 }
 
@@ -113,5 +132,6 @@ function onDialogCancel(): void {
 
 .tabs-bar__close:hover {
   opacity: 1;
+  color: var(--mm-color-danger);
 }
 </style>

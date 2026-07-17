@@ -113,6 +113,7 @@ function onDirtyDialogCancel(): void {
 
 <template>
   <aside class="git-panel">
+    <div v-if="gitStore.error" class="git-panel__error" role="alert">{{ gitStore.error }}</div>
     <div v-if="!workspacePath" class="git-panel__hint">请先打开文件夹</div>
     <div v-else-if="!gitStore.isRepo" class="git-panel__hint">当前文件夹不是 Git 仓库</div>
     <template v-else>
@@ -125,6 +126,34 @@ function onDirtyDialogCancel(): void {
         <button type="button" class="git-panel__refresh" @click="gitStore.refresh(workspacePath)">
           刷新
         </button>
+      </div>
+
+      <div
+        v-if="gitStore.hasMergeConflicts"
+        class="git-panel__merge"
+        role="status"
+      >
+        <strong>{{
+          gitStore.mergeInProgress ? "检测到合并进行中" : "检测到冲突文件"
+        }}</strong>
+        <p>
+          请先在编辑器中打开下列文件，解决
+          <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> /
+          <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code>
+          冲突标记，再暂存并完成提交。
+        </p>
+        <ul v-if="gitStore.conflictedFiles.length > 0">
+          <li v-for="file in gitStore.conflictedFiles" :key="`c-${file.path}`">
+            <button type="button" class="git-panel__file" @click="onSelectFile(file)">
+              <span>{{ file.path }}</span>
+              <span class="git-panel__kind">conflicted</span>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="git-panel__merge-note">
+          仓库处于合并相关状态，但尚未列出冲突文件；请刷新或检查命令行
+          <code>git status</code>。
+        </p>
       </div>
 
       <div class="git-panel__tabs">
@@ -179,9 +208,16 @@ function onDirtyDialogCancel(): void {
                 rows="3"
                 placeholder="提交说明"
               />
+              <p v-if="gitStore.hasMergeConflicts" class="git-panel__commit-hint">
+                存在未解决冲突时无法提交
+              </p>
               <button
                 type="button"
-                :disabled="!gitStore.commitMessage.trim() || gitStore.stagedFiles.length === 0"
+                :disabled="
+                  !gitStore.commitMessage.trim() ||
+                  gitStore.stagedFiles.length === 0 ||
+                  gitStore.hasMergeConflicts
+                "
                 @click="onCommit"
               >
                 提交
@@ -216,53 +252,121 @@ function onDirtyDialogCancel(): void {
   display: flex;
   flex-direction: column;
   height: 100%;
-  border-left: 1px solid var(--mm-color-border);
   background: var(--mm-color-panel, var(--mm-color-bg));
   color: var(--mm-color-text);
-  min-width: 280px;
+  min-width: 0;
+  width: 100%;
 }
 
 .git-panel__hint {
   padding: 16px;
   color: var(--mm-color-text-muted);
   font-size: 13px;
+  line-height: 1.6;
+}
+
+.git-panel__error {
+  margin: 10px;
+  padding: 8px 10px;
+  border-radius: var(--mm-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--mm-color-danger) 36%, transparent);
+  background: var(--mm-color-danger-soft);
+  color: var(--mm-color-danger);
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.git-panel__merge {
+  margin: 10px;
+  padding: 10px 12px;
+  border-radius: var(--mm-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--mm-color-warning, #b54708) 40%, transparent);
+  background: var(--mm-color-warning-soft, #fffaeb);
+  color: var(--mm-color-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.git-panel__merge strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--mm-color-warning, #b54708);
+}
+
+.git-panel__merge p {
+  margin: 0 0 8px;
+}
+
+.git-panel__merge ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.git-panel__merge li {
+  display: flex;
+  margin-bottom: 4px;
+}
+
+.git-panel__merge-note {
+  margin: 0;
+  color: var(--mm-color-text-muted);
+}
+
+.git-panel__commit-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--mm-color-warning, #b54708);
 }
 
 .git-panel__header {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 8px;
+  padding: 10px;
   border-bottom: 1px solid var(--mm-color-border);
+  background: var(--mm-color-panel);
 }
 
 .git-panel__refresh {
   border: 1px solid var(--mm-color-border);
-  background: transparent;
+  background: var(--mm-color-surface);
   color: inherit;
-  border-radius: 4px;
-  padding: 2px 8px;
+  border-radius: var(--mm-radius-sm);
+  padding: 4px 9px;
   font-size: 12px;
   cursor: pointer;
 }
 
+.git-panel__refresh:hover {
+  background: var(--mm-color-hover);
+  border-color: var(--mm-color-accent);
+}
+
 .git-panel__tabs {
   display: flex;
+  gap: 4px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--mm-color-border);
+  background: var(--mm-color-bg-muted);
 }
 
 .git-panel__tabs button {
   flex: 1;
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: inherit;
-  padding: 8px;
+  border-radius: var(--mm-radius-sm);
+  padding: 6px 8px;
   cursor: pointer;
   font-size: 13px;
 }
 
 .git-panel__tabs button.active {
-  border-bottom: 2px solid var(--mm-color-accent);
+  border-color: var(--mm-color-border);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-accent);
   font-weight: 600;
 }
 
@@ -281,12 +385,14 @@ function onDirtyDialogCancel(): void {
 }
 
 .git-panel__section {
-  padding: 8px;
+  padding: 10px;
 }
 
 .git-panel__section h4 {
-  margin: 0 0 6px;
-  font-size: 12px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--mm-color-text-muted);
 }
 
@@ -300,6 +406,11 @@ function onDirtyDialogCancel(): void {
   display: flex;
   align-items: center;
   gap: 4px;
+  border-radius: var(--mm-radius-sm);
+}
+
+.git-panel__section li:hover {
+  background: var(--mm-color-hover);
 }
 
 .git-panel__file {
@@ -311,7 +422,7 @@ function onDirtyDialogCancel(): void {
   background: transparent;
   color: inherit;
   text-align: left;
-  padding: 4px 2px;
+  padding: 5px 6px;
   cursor: pointer;
   font-size: 12px;
   min-width: 0;
@@ -326,39 +437,46 @@ function onDirtyDialogCancel(): void {
 .git-panel__kind {
   color: var(--mm-color-text-muted);
   flex-shrink: 0;
+  font-size: 11px;
 }
 
 .git-panel__action {
   border: none;
-  background: transparent;
-  color: inherit;
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-accent);
   cursor: pointer;
   width: 22px;
   height: 22px;
 }
 
+.git-panel__action:hover {
+  background: var(--mm-color-active);
+}
+
 .git-panel__commit {
-  padding: 8px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .git-panel__commit textarea {
   resize: vertical;
   font-size: 12px;
-  padding: 6px;
+  line-height: 1.5;
+  padding: 8px;
   border: 1px solid var(--mm-color-border);
-  border-radius: 4px;
-  background: var(--mm-color-bg);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-color-surface);
   color: var(--mm-color-text);
 }
 
 .git-panel__commit button {
   align-self: flex-end;
-  padding: 4px 12px;
+  padding: 5px 14px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--mm-radius-sm);
   background: var(--mm-color-accent);
   color: #fff;
   cursor: pointer;

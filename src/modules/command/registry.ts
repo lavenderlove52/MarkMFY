@@ -1,6 +1,7 @@
 /**
  * 命令注册中心：业务侧只注册/执行，本模块不感知具体业务实现。
  */
+import { toastError } from "../../notify";
 import type { CommandDefinition, CommandListItem } from "./types";
 
 const commands = new Map<string, CommandDefinition>();
@@ -55,8 +56,14 @@ export async function executeCommand(id: string): Promise<boolean> {
   const command = commands.get(id);
   if (!command) return false;
   if (command.when && !command.when()) return false;
-  await command.run();
-  return true;
+  try {
+    await command.run();
+    return true;
+  } catch (err) {
+    // 业务层已 toast 的不会再抛；此处兜底未捕获异常
+    toastError(err, "命令执行失败");
+    return false;
+  }
 }
 
 /** 测试或热重载时清空（正常运行不调用）。 */

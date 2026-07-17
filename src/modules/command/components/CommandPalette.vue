@@ -110,7 +110,8 @@ function onKeydown(e: KeyboardEvent): void {
   display: flex;
   justify-content: center;
   padding-top: min(18vh, 120px);
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(2px);
 }
 
 .mm-cmd-panel {
@@ -118,48 +119,48 @@ function onKeydown(e: KeyboardEvent): void {
   max-height: min(60vh, 420px);
   display: flex;
   flex-direction: column;
-  background: var(--mm-color-panel, #fff);
-  color: var(--mm-color-text, #1f1f1f);
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.12));
-  border-radius: 8px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
+  background: var(--mm-color-surface-elevated);
+  color: var(--mm-color-text);
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-lg);
+  box-shadow: var(--mm-shadow-overlay);
   overflow: hidden;
 }
 
 .mm-cmd-input {
   border: none;
-  border-bottom: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.1));
+  border-bottom: 1px solid var(--mm-color-border);
   background: transparent;
   color: inherit;
-  padding: 14px 16px;
-  font-size: 15px;
+  padding: 16px 18px;
+  font-size: 16px;
   outline: none;
 }
 
 .mm-cmd-list {
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: 8px;
   overflow: auto;
 }
 
 .mm-cmd-empty {
   padding: 16px;
   font-size: 13px;
-  color: var(--mm-color-text-muted, #666);
+  color: var(--mm-color-text-muted);
 }
 
 .mm-cmd-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 11px;
+  border-radius: var(--mm-radius-sm);
   cursor: pointer;
 }
 
 .mm-cmd-item--active {
-  background: var(--mm-color-bg-muted, #f6f7f9);
+  background: var(--mm-color-active);
 }
 
 .mm-cmd-item__text {
@@ -176,7 +177,7 @@ function onKeydown(e: KeyboardEvent): void {
 
 .mm-cmd-item__sub {
   font-size: 11px;
-  color: var(--mm-color-text-muted, #666);
+  color: var(--mm-color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -187,8 +188,9 @@ function onKeydown(e: KeyboardEvent): void {
   font-family: inherit;
   font-size: 11px;
   padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.12));
-  color: var(--mm-color-text-muted, #666);
+  border-radius: var(--mm-radius-sm);
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-bg-muted);
+  color: var(--mm-color-text-muted);
 }
 </style>

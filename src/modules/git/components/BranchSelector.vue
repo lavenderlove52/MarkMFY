@@ -40,19 +40,22 @@ function onChange(event: Event): void {
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  min-width: 0;
+  flex: 1;
 }
 
 .branch-selector__label {
-  color: #666;
+  color: var(--mm-color-text-muted);
 }
 
 .branch-selector__select {
   flex: 1;
   min-width: 0;
-  padding: 2px 4px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
-  background: var(--mm-color-bg, #fff);
+  padding: 4px 8px;
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-text);
   font-size: 12px;
 }
 </style>

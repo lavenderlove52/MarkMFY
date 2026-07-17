@@ -19,9 +19,22 @@ const localKeybindings = ref<Record<string, string>>({ ...settings.keybindings }
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 const fontPresets = [
-  { label: "系统 UI", value: '"Segoe UI", system-ui, -apple-system, sans-serif' },
-  { label: "衬线", value: 'Georgia, "Times New Roman", serif' },
-  { label: "等宽", value: 'Consolas, "Courier New", monospace' },
+  {
+    label: "平衡默认",
+    value: '"Segoe UI", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif',
+  },
+  {
+    label: "中文阅读",
+    value: '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+  },
+  {
+    label: "长文书写",
+    value: '"LXGW WenKai", "Kaiti SC", "KaiTi", serif',
+  },
+  {
+    label: "技术文档",
+    value: '"Cascadia Code", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace',
+  },
 ];
 
 watch(
@@ -125,7 +138,7 @@ onBeforeUnmount(() => {
 
       <section class="mm-settings-section">
         <h3 class="mm-settings-section__title">编辑器</h3>
-        <div class="mm-settings-row">
+        <div class="mm-settings-row mm-settings-row--stack">
           <span class="mm-settings-row__label">字体预设</span>
           <div class="mm-settings-row__controls">
             <button
@@ -181,19 +194,20 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(2px);
 }
 
 .mm-settings-panel {
-  width: min(520px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
   overflow: auto;
-  background: var(--mm-color-panel, #fff);
-  color: var(--mm-color-text, #1f1f1f);
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.12));
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
-  padding: 16px 18px 18px;
+  background: var(--mm-color-surface-elevated);
+  color: var(--mm-color-text);
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-lg);
+  box-shadow: var(--mm-shadow-overlay);
+  padding: 18px 20px 20px;
 }
 
 .mm-settings-panel__header {
@@ -210,25 +224,25 @@ onBeforeUnmount(() => {
 }
 
 .mm-settings-panel__close {
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.15));
-  background: transparent;
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-surface);
   color: inherit;
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: var(--mm-radius-sm);
+  padding: 5px 11px;
   cursor: pointer;
   font-size: 12px;
 }
 
 .mm-settings-section {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.08));
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--mm-color-border);
 }
 
 .mm-settings-section__title {
   margin: 0 0 10px;
   font-size: 13px;
-  color: var(--mm-color-text-muted, #666);
+  color: var(--mm-color-text-muted);
   font-weight: 600;
 }
 
@@ -256,34 +270,45 @@ onBeforeUnmount(() => {
 .mm-settings-row__controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .mm-settings-chip {
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.15));
-  background: var(--mm-color-bg-muted, #f6f7f9);
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-bg-muted);
   color: inherit;
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 5px 11px;
   font-size: 12px;
   cursor: pointer;
 }
 
+.mm-settings-chip:hover {
+  background: var(--mm-color-hover);
+}
+
 .mm-settings-chip--active {
-  border-color: var(--mm-color-accent, #396cd8);
-  background: var(--mm-color-accent, #396cd8);
-  color: #fff;
+  border-color: var(--mm-color-accent);
+  background: var(--mm-color-accent-soft);
+  color: var(--mm-color-accent);
+  font-weight: 600;
 }
 
 .mm-settings-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--mm-color-border, rgba(0, 0, 0, 0.15));
-  background: var(--mm-color-bg, #fff);
+  border: 1px solid var(--mm-color-border);
+  background: var(--mm-color-surface);
   color: inherit;
-  border-radius: 4px;
-  padding: 6px 8px;
+  border-radius: var(--mm-radius-sm);
+  padding: 7px 9px;
   font-size: 12px;
+  outline: none;
+}
+
+.mm-settings-input:focus {
+  border-color: var(--mm-color-accent);
+  box-shadow: 0 0 0 3px var(--mm-color-accent-soft);
 }
 
 .mm-settings-range {
@@ -293,6 +318,6 @@ onBeforeUnmount(() => {
 .mm-settings-hint {
   margin: 14px 0 0;
   font-size: 11px;
-  color: var(--mm-color-text-muted, #666);
+  color: var(--mm-color-text-muted);
 }
 </style>

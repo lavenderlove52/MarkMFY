@@ -1,10 +1,35 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { createToolbarButton, openLightbox } from "./widgetDom";
+import { requestBlockSourceEdit } from "./blockSourceEdit";
 
 export { appendInlineMarkdown } from "./widgetDom";
 export { TableWidget } from "./tableWidget";
 export type { TableCellData } from "./tableWidget";
 export { MermaidWidget } from "./mermaidWidget";
+export { CodeBlockWidget } from "./codeBlockWidget";
+export { MathWidget } from "./mathWidget";
+
+interface ImageWidgetDomState {
+  resizeObserver: ResizeObserver | null;
+}
+
+const IMAGE_WIDGET_STATE_KEY = "_mmImageWidget";
+
+function setImageWidgetState(dom: HTMLElement, state: ImageWidgetDomState): void {
+  (dom as unknown as Record<string, ImageWidgetDomState>)[IMAGE_WIDGET_STATE_KEY] = state;
+}
+
+function getImageWidgetState(dom: HTMLElement): ImageWidgetDomState | null {
+  return (dom as unknown as Record<string, ImageWidgetDomState | undefined>)[IMAGE_WIDGET_STATE_KEY] ?? null;
+}
+
+function updateImageFit(view: EditorView, wrap: HTMLElement, img: HTMLImageElement): void {
+  const maxWidth = Math.max(180, view.scrollDOM.clientWidth - 56);
+  const maxHeight = Math.max(180, view.scrollDOM.clientHeight - 96);
+  wrap.style.maxWidth = `${maxWidth}px`;
+  img.style.maxWidth = `${maxWidth}px`;
+  img.style.maxHeight = `${maxHeight}px`;
+}
 
 /** 任务列表 checkbox，点击时把文档中的 "[ ]"/"[x]" 原地切换。 */
 export class CheckboxWidget extends WidgetType {
@@ -43,16 +68,48 @@ export class CheckboxWidget extends WidgetType {
   }
 }
 
-/** 分割线渲染（与标题保持间距，避免看起来像标题下划线）。 */
+/** 分割线渲染；双击进入 `---` 源码编辑（事件绑在 Widget 上，避免 posAtCoords 点不中）。 */
 export class HrWidget extends WidgetType {
-  eq(): boolean {
-    return true;
+  constructor(
+    readonly from: number,
+    readonly to: number,
+  ) {
+    super();
   }
 
-  toDOM(): HTMLElement {
+  eq(other: HrWidget): boolean {
+    return this.from === other.from && this.to === other.to;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "mm-hr-wrap";
+    wrap.title = "双击编辑源码";
+    wrap.setAttribute("aria-label", "分割线，双击编辑源码");
+
     const hr = document.createElement("hr");
     hr.className = "mm-hr";
-    return hr;
+    wrap.appendChild(hr);
+
+    const enterSource = (e: MouseEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      const anchor = this.from < this.to ? Math.min(this.from + 1, this.to - 1) : this.from;
+      view.dispatch({
+        effects: requestBlockSourceEdit.of({ from: this.from, to: this.to }),
+        selection: { anchor },
+        scrollIntoView: true,
+      });
+      view.focus();
+    };
+
+    wrap.addEventListener("dblclick", enterSource);
+    return wrap;
+  }
+
+  ignoreEvent(): boolean {
+    // 事件由 Widget DOM 自己处理（与 Mermaid 一致）；否则编辑器收不到点在 Widget 内的双击
+    return true;
   }
 }
 
@@ -83,7 +140,11 @@ export class ImageWidget extends WidgetType {
     return other.src === this.src && other.alt === this.alt;
   }
 
-  toDOM(): HTMLElement {
+  destroy(dom: HTMLElement): void {
+    getImageWidgetState(dom)?.resizeObserver?.disconnect();
+  }
+
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("div");
     wrap.className = "mm-image-wrap";
 
@@ -104,11 +165,18 @@ export class ImageWidget extends WidgetType {
     img.alt = this.alt;
     img.className = "mm-image";
     img.loading = "lazy";
+    // 图片是异步加载资源，加载完成/失败前后尺寸会跳变；不主动 requestMeasure
+    // 会导致主编辑器块高度缓存过期，点击图片下方内容命中错误的行。
+    img.addEventListener("load", () => {
+      updateImageFit(view, wrap, img);
+      view.requestMeasure();
+    });
     img.addEventListener("error", () => {
       wrap.className = "mm-image--error";
       wrap.textContent = `图片加载失败: ${this.alt || this.src}`;
       toolbar.remove();
       img.remove();
+      view.requestMeasure();
     });
     img.addEventListener("dblclick", () => {
       const big = document.createElement("img");
@@ -119,6 +187,16 @@ export class ImageWidget extends WidgetType {
     });
 
     wrap.append(toolbar, img);
+    updateImageFit(view, wrap, img);
+    const state: ImageWidgetDomState = { resizeObserver: null };
+    setImageWidgetState(wrap, state);
+    if (typeof ResizeObserver !== "undefined") {
+      state.resizeObserver = new ResizeObserver(() => {
+        updateImageFit(view, wrap, img);
+        view.requestMeasure();
+      });
+      state.resizeObserver.observe(view.scrollDOM);
+    }
     return wrap;
   }
 

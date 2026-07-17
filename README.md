@@ -20,12 +20,29 @@ npm install
 npm start
 ```
 
+## 打包分发（Windows）
+
+双击 **`build.bat`**（或运行 `.\build.ps1` / `npm run pack`）。
+
+首次打包会自动运行 `setup-nsis.ps1`，用更长超时/镜像下载 NSIS 工具链到  
+`%LOCALAPPDATA%\tauri\NSIS`（解决 GitHub 超时）。也可单独先执行：
+
+```powershell
+.\setup-nsis.ps1
+```
+
+成功后安装包在：
+
+- **NSIS（推荐发给别人）**：`src-tauri\target\release\bundle\nsis\`
+- **绿色 exe**：`src-tauri\target\release\markmfy.exe`
+
 ## 常用脚本
 
 | 命令 | 说明 |
 | --- | --- |
 | `start.bat` / `npm start` | 编译并启动开发窗口 |
-| `npm run tauri dev` | 同上 |
+| `build.bat` / `npm run pack` | 打 Windows Release 安装包 |
+| `npm run tauri dev` | 同上开发启动 |
 | `npm run build` | 类型检查 + 前端构建 |
 | `npm run lint` | ESLint 检查 |
 | `npm run format` | Prettier 格式化 |

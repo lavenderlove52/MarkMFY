@@ -8,9 +8,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            commands::app::app_startup_open_paths,
             commands::fs::fs_list_dir,
             commands::fs::fs_read_file,
             commands::fs::fs_write_file,
+            commands::fs::fs_create_file,
+            commands::fs::fs_create_dir,
             commands::fs::fs_save_pasted_image,
             commands::git::git_status,
             commands::git::git_diff,
@@ -23,6 +26,7 @@ pub fn run() {
             commands::git::git_checkout,
             commands::settings::settings_load,
             commands::settings::settings_save,
+            commands::search::search_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

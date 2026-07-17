@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { loadSettings, saveSettings } from "../../ipc";
+import { loadSettings, normalizeInvokeError, saveSettings } from "../../ipc";
+import { toastError } from "../../notify";
 import { DEFAULT_SETTINGS, normalizeSettings, type AppSettings, type ThemeMode } from "./types";
 
 export const useSettingsStore = defineStore("settings", {
@@ -16,6 +17,13 @@ export const useSettingsStore = defineStore("settings", {
         editorFontFamily: state.editorFontFamily,
         editorFontSize: state.editorFontSize,
         keybindings: { ...state.keybindings },
+        lastWorkspacePath: state.lastWorkspacePath,
+        sidebarWidth: state.sidebarWidth,
+        gitPanelWidth: state.gitPanelWidth,
+        sidebarOpen: state.sidebarOpen,
+        gitPanelOpen: state.gitPanelOpen,
+        lastFontColor: state.lastFontColor,
+        lastBackgroundColor: state.lastBackgroundColor,
       };
     },
   },
@@ -29,12 +37,26 @@ export const useSettingsStore = defineStore("settings", {
         this.editorFontFamily = normalized.editorFontFamily;
         this.editorFontSize = normalized.editorFontSize;
         this.keybindings = { ...normalized.keybindings };
+        this.lastWorkspacePath = normalized.lastWorkspacePath;
+        this.sidebarWidth = normalized.sidebarWidth;
+        this.gitPanelWidth = normalized.gitPanelWidth;
+        this.sidebarOpen = normalized.sidebarOpen;
+        this.gitPanelOpen = normalized.gitPanelOpen;
+        this.lastFontColor = normalized.lastFontColor;
+        this.lastBackgroundColor = normalized.lastBackgroundColor;
       } catch (err) {
-        console.warn("[markmfy] load settings failed, using defaults", err);
+        console.warn("[markmfy] load settings failed, using defaults", normalizeInvokeError(err));
         this.theme = DEFAULT_SETTINGS.theme;
         this.editorFontFamily = DEFAULT_SETTINGS.editorFontFamily;
         this.editorFontSize = DEFAULT_SETTINGS.editorFontSize;
         this.keybindings = {};
+        this.lastWorkspacePath = "";
+        this.sidebarWidth = DEFAULT_SETTINGS.sidebarWidth;
+        this.gitPanelWidth = DEFAULT_SETTINGS.gitPanelWidth;
+        this.sidebarOpen = true;
+        this.gitPanelOpen = true;
+        this.lastFontColor = DEFAULT_SETTINGS.lastFontColor;
+        this.lastBackgroundColor = DEFAULT_SETTINGS.lastBackgroundColor;
       } finally {
         this.loaded = true;
       }
@@ -45,6 +67,8 @@ export const useSettingsStore = defineStore("settings", {
       this.saving = true;
       try {
         await saveSettings(this.snapshot);
+      } catch (err) {
+        toastError(err, "保存设置失败");
       } finally {
         this.saving = false;
       }
@@ -67,12 +91,23 @@ export const useSettingsStore = defineStore("settings", {
       this.keybindings = { ...keybindings };
     },
 
+    setLastWorkspacePath(path: string): void {
+      this.lastWorkspacePath = path.trim();
+    },
+
     patch(partial: Partial<AppSettings>): void {
       const next = normalizeSettings({ ...this.snapshot, ...partial });
       this.theme = next.theme;
       this.editorFontFamily = next.editorFontFamily;
       this.editorFontSize = next.editorFontSize;
       this.keybindings = { ...next.keybindings };
+      this.lastWorkspacePath = next.lastWorkspacePath;
+      this.sidebarWidth = next.sidebarWidth;
+      this.gitPanelWidth = next.gitPanelWidth;
+      this.sidebarOpen = next.sidebarOpen;
+      this.gitPanelOpen = next.gitPanelOpen;
+      this.lastFontColor = next.lastFontColor;
+      this.lastBackgroundColor = next.lastBackgroundColor;
     },
   },
 });
