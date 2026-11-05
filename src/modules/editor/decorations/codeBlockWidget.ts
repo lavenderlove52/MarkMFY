@@ -3,8 +3,9 @@ import { EditorView, keymap, WidgetType } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
 import { markmfyHighlightStyle } from "../language/highlight";
-import { createToolbarButton } from "./widgetDom";
+import { copyTextToClipboard, createToolbarButton } from "./widgetDom";
 import { requestBlockSourceEdit } from "./blockSourceEdit";
+import { showToast, toastError } from "../../../notify";
 import {
   CODE_BLOCK_LANG_OPTIONS,
   fenceLangForSelect,
@@ -205,6 +206,18 @@ export class CodeBlockWidget extends WidgetType {
 
     toolbar.append(
       select,
+      createToolbarButton("复制源码", () => {
+        void copyTextToClipboard(serializeFencedCode(this.lang, this.body)).then((ok) => {
+          if (ok) showToast("已复制源码", "success");
+          else toastError(new Error("复制失败"), "复制源码失败");
+        });
+      }),
+      createToolbarButton("复制内容", () => {
+        void copyTextToClipboard(this.body).then((ok) => {
+          if (ok) showToast("已复制内容", "success");
+          else toastError(new Error("复制失败"), "复制内容失败");
+        });
+      }),
       createToolbarButton("源码编辑", () => {
         const state = getState(wrap);
         const from = state?.from ?? this.from;

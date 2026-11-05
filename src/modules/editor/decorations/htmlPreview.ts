@@ -3,7 +3,7 @@
  * 不依赖 lezer 成对节点（HTMLTag 是兄弟节点），用正则在可见范围内匹配。
  */
 import type { EditorState, Range } from "@codemirror/state";
-import { Decoration } from "@codemirror/view";
+import { Decoration, WidgetType } from "@codemirror/view";
 
 function isCursorTouching(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((r) => {
@@ -73,7 +73,7 @@ function decorateSimpleTags(
 }
 
 function decorateSpans(
-  state: EditorState,
+  _state: EditorState,
   from: number,
   text: string,
   ranges: Range<Decoration>[],
@@ -83,12 +83,18 @@ function decorateSpans(
   while ((m = SPAN_RE.exec(text))) {
     const absFrom = from + m.index;
     const absTo = absFrom + m[0].length;
-    if (isCursorTouching(state, absFrom, absTo)) continue;
+    // span 样式不因光标进入而展开源码：徽标常显、标签始终隐藏，
+    // 直接点击样式文字就是普通编辑（想看源码走源码编辑模式）。
     const styleRaw = m[1] ?? "";
     const style = sanitizeInlineStyle(styleRaw);
     const openLen = m[0].indexOf(">") + 1;
     const closeLen = "</span>".length;
-    hideRange(ranges, absFrom, absFrom + openLen);
+    // 开头标签渲染成可双击的样式徽标（双击选中整个 span 内容，便于再次套用/取消样式）
+    ranges.push(
+      Decoration.replace({
+        widget: new SpanBadgeWidget(style, absFrom + openLen, absTo - closeLen),
+      }).range(absFrom, absFrom + openLen),
+    );
     hideRange(ranges, absTo - closeLen, absTo);
     const contentFrom = absFrom + openLen;
     const contentTo = absTo - closeLen;
@@ -100,6 +106,63 @@ function decorateSpans(
         }).range(contentFrom, contentTo),
       );
     }
+  }
+}
+
+/**
+ * `<span style="...">` 开头标签的样式徽标：显示字号（如 16）或颜色小色块。
+ * 双击徽标选中整个 span 内容（处理逻辑在 livePreview.ts 的 dblclick handler）。
+ */
+class SpanBadgeWidget extends WidgetType {
+  constructor(
+    private readonly style: string,
+    private readonly contentFrom: number,
+    private readonly contentTo: number,
+  ) {
+    super();
+  }
+
+  eq(other: SpanBadgeWidget): boolean {
+    return (
+      other.style === this.style &&
+      other.contentFrom === this.contentFrom &&
+      other.contentTo === this.contentTo
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "mm-style-badge";
+    const entries = this.style ? this.style.split(";") : [];
+    let label = "A";
+    let badgeColor = "";
+    for (const entry of entries) {
+      const idx = entry.indexOf(":");
+      if (idx <= 0) continue;
+      const key = entry.slice(0, idx).trim();
+      const val = entry.slice(idx + 1).trim();
+      if (key === "font-size") {
+        const px = val.match(/(\d+(?:\.\d+)?)\s*px/i);
+        if (px) label = `${px[1]}`;
+      } else if (key === "color" && !badgeColor) {
+        badgeColor = val;
+      }
+    }
+    el.textContent = label;
+    if (badgeColor) {
+      const swatch = document.createElement("i");
+      swatch.className = "mm-style-badge__swatch";
+      swatch.style.background = badgeColor;
+      el.appendChild(swatch);
+    }
+    el.dataset.spanFrom = String(this.contentFrom);
+    el.dataset.spanTo = String(this.contentTo);
+    el.title = this.style;
+    return el;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
   }
 }
 

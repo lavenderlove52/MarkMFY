@@ -2,7 +2,14 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { KeybindingEditor } from "../../command";
 import { useSettingsStore } from "../store";
-import type { ThemeMode, UiStyle } from "../types";
+import {
+  DEFAULT_SETTINGS,
+  EDITOR_CONTENT_WIDTH_MAX,
+  EDITOR_CONTENT_WIDTH_MIN,
+  EDITOR_CONTENT_WIDTH_UNLIMITED,
+  type ThemeMode,
+  type UiStyle,
+} from "../types";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{
@@ -16,6 +23,7 @@ const localTheme = ref<ThemeMode>(settings.theme);
 const localUiStyle = ref<UiStyle>(settings.uiStyle);
 const localFontFamily = ref(settings.editorFontFamily);
 const localFontSize = ref(settings.editorFontSize);
+const localContentWidth = ref(settings.editorContentWidth);
 const localKeybindings = ref<Record<string, string>>({ ...settings.keybindings });
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -46,11 +54,22 @@ watch(
     localUiStyle.value = settings.uiStyle;
     localFontFamily.value = settings.editorFontFamily;
     localFontSize.value = settings.editorFontSize;
+    localContentWidth.value = settings.editorContentWidth;
     localKeybindings.value = { ...settings.keybindings };
   },
 );
 
 const fontSizeLabel = computed(() => `${localFontSize.value}px`);
+const isContentWidthUnlimited = computed(
+  () => localContentWidth.value <= EDITOR_CONTENT_WIDTH_UNLIMITED,
+);
+const contentWidthLabel = computed(() =>
+  isContentWidthUnlimited.value ? "不限" : `${localContentWidth.value}px`,
+);
+/** 拖动滑块时的展示值：不限宽度用最大刻度表示滑块位置 */
+const contentWidthSliderValue = computed(() =>
+  isContentWidthUnlimited.value ? EDITOR_CONTENT_WIDTH_MIN : localContentWidth.value,
+);
 
 function schedulePersist(): void {
   if (persistTimer) clearTimeout(persistTimer);
@@ -66,6 +85,7 @@ function applyAndPersist(): void {
     uiStyle: localUiStyle.value,
     editorFontFamily: localFontFamily.value,
     editorFontSize: localFontSize.value,
+    editorContentWidth: localContentWidth.value,
     keybindings: { ...localKeybindings.value },
   });
   schedulePersist();
@@ -93,6 +113,18 @@ function onFontFamilyInput(event: Event): void {
 
 function onFontSizeInput(event: Event): void {
   localFontSize.value = Number((event.target as HTMLInputElement).value);
+  applyAndPersist();
+}
+
+function onContentWidthInput(event: Event): void {
+  localContentWidth.value = Number((event.target as HTMLInputElement).value);
+  applyAndPersist();
+}
+
+function onContentWidthUnlimitedToggle(): void {
+  localContentWidth.value = isContentWidthUnlimited.value
+    ? DEFAULT_SETTINGS.editorContentWidth
+    : EDITOR_CONTENT_WIDTH_UNLIMITED;
   applyAndPersist();
 }
 
@@ -206,6 +238,30 @@ onBeforeUnmount(() => {
             @input="onFontSizeInput"
           />
         </div>
+        <div class="mm-settings-row">
+          <span class="mm-settings-row__label">阅读区域宽度 {{ contentWidthLabel }}</span>
+          <input
+            class="mm-settings-range"
+            type="range"
+            :min="EDITOR_CONTENT_WIDTH_MIN"
+            :max="EDITOR_CONTENT_WIDTH_MAX"
+            step="20"
+            :disabled="isContentWidthUnlimited"
+            :value="contentWidthSliderValue"
+            @input="onContentWidthInput"
+          />
+          <button
+            type="button"
+            class="mm-settings-chip"
+            :class="{ 'mm-settings-chip--active': isContentWidthUnlimited }"
+            @click="onContentWidthUnlimitedToggle"
+          >
+            不限宽度
+          </button>
+        </div>
+        <p class="mm-settings-row-hint">
+          表格、图片、流程图、代码块的最大宽度均以阅读区域为基准，调整此项会一起变化。
+        </p>
       </section>
 
       <section class="mm-settings-section">

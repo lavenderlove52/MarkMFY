@@ -21,6 +21,7 @@ const emit = defineEmits<{
   select: [node: FileTreeNode];
   createFile: [node: FileTreeNode | null];
   createFolder: [node: FileTreeNode | null];
+  revealInDir: [node: FileTreeNode];
   /** 子树把右键坐标冒泡给根节点 */
   contextMenuAt: [payload: { node: FileTreeNode; x: number; y: number }];
 }>();
@@ -77,6 +78,12 @@ function runCreateFolder(): void {
   emit("createFolder", node);
 }
 
+function runRevealInDir(): void {
+  const node = contextMenu.value?.node;
+  closeContextMenu();
+  if (node) emit("revealInDir", node);
+}
+
 function onDocClick(): void {
   closeContextMenu();
 }
@@ -117,6 +124,7 @@ onBeforeUnmount(() => {
         @select="(child) => emit('select', child)"
         @create-file="(child) => emit('createFile', child)"
         @create-folder="(child) => emit('createFolder', child)"
+        @reveal-in-dir="(child) => emit('revealInDir', child)"
         @context-menu-at="onChildContextMenu"
       />
     </li>
@@ -134,6 +142,14 @@ onBeforeUnmount(() => {
       </button>
       <button type="button" class="file-tree__menu-item" @click="runCreateFolder">
         新建文件夹
+      </button>
+      <button
+        v-if="contextMenu.node"
+        type="button"
+        class="file-tree__menu-item"
+        @click="runRevealInDir"
+      >
+        {{ contextMenu.node.isDir ? "打开文件夹" : "打开文件所在目录" }}
       </button>
     </div>
   </Teleport>

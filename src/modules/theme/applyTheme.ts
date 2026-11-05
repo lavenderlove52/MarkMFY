@@ -43,7 +43,6 @@ export interface ThemeTokens {
   shadowPanel: string;
   shadowOverlay: string;
   editorLineHeight: string;
-  editorContentWidth: string;
 }
 
 /** 原版（经典）浅色 — 保持改前观感 */
@@ -84,7 +83,6 @@ const CLASSIC_LIGHT: ThemeTokens = {
   shadowPanel: "0 1px 2px rgba(24, 24, 55, 0.06)",
   shadowOverlay: "0 20px 60px rgba(24, 24, 55, 0.20)",
   editorLineHeight: "1.72",
-  editorContentWidth: "980px",
 };
 
 /** 原版（经典）深色 */
@@ -125,7 +123,6 @@ const CLASSIC_DARK: ThemeTokens = {
   shadowPanel: "0 1px 2px rgba(0, 0, 0, 0.32)",
   shadowOverlay: "0 20px 60px rgba(0, 0, 0, 0.5)",
   editorLineHeight: "1.72",
-  editorContentWidth: "980px",
 };
 
 /** 清新浅色：雾蓝 + 鼠尾草绿 + 暖灰 */
@@ -166,7 +163,6 @@ const FRESH_LIGHT: ThemeTokens = {
   shadowPanel: "0 1px 2px rgba(32, 38, 41, 0.05)",
   shadowOverlay: "0 16px 48px rgba(32, 38, 41, 0.14)",
   editorLineHeight: "1.8",
-  editorContentWidth: "820px",
 };
 
 /** 清新深色 */
@@ -207,7 +203,6 @@ const FRESH_DARK: ThemeTokens = {
   shadowPanel: "0 1px 2px rgba(0, 0, 0, 0.28)",
   shadowOverlay: "0 18px 52px rgba(0, 0, 0, 0.45)",
   editorLineHeight: "1.8",
-  editorContentWidth: "820px",
 };
 
 export function tokensFor(theme: ThemeMode, uiStyle: UiStyle = "fresh"): ThemeTokens {
@@ -216,14 +211,22 @@ export function tokensFor(theme: ThemeMode, uiStyle: UiStyle = "fresh"): ThemeTo
   return fresh ? FRESH_LIGHT : CLASSIC_LIGHT;
 }
 
+/** 阅读区域宽度未显式传入时的回退值（px） */
+const DEFAULT_CONTENT_WIDTH = 820;
+
 /**
  * 将主题与编辑器字体写到 documentElement CSS 变量。
  * 全局 UI 与编辑器均通过变量读取，切换无需重启。
+ *
+ * @param contentWidth 阅读区域最大宽度（px）；传 0 表示不限宽度（撑满可用空间）。
+ *   表格/图片/流程图/代码块等内部组件均以阅读区域为 100% 基准，因此调整此值
+ *   即可让所有组件的最大宽度跟随变化，无需分别设置。
  */
 export function applyTheme(
   theme: ThemeMode,
   editor?: { fontFamily: string; fontSize: number },
   uiStyle: UiStyle = "fresh",
+  contentWidth: number = DEFAULT_CONTENT_WIDTH,
 ): void {
   const root = document.documentElement;
   const tokens = tokensFor(theme, uiStyle);
@@ -267,7 +270,10 @@ export function applyTheme(
   root.style.setProperty("--mm-shadow-panel", tokens.shadowPanel);
   root.style.setProperty("--mm-shadow-overlay", tokens.shadowOverlay);
   root.style.setProperty("--mm-editor-line-height", tokens.editorLineHeight);
-  root.style.setProperty("--mm-editor-content-width", tokens.editorContentWidth);
+  root.style.setProperty(
+    "--mm-editor-content-width",
+    contentWidth > 0 ? `${contentWidth}px` : "none",
+  );
 
   if (editor) {
     root.style.setProperty("--mm-editor-font-family", editor.fontFamily);

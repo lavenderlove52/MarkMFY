@@ -66,6 +66,9 @@ export async function exportHtmlFile(input: ExportDocumentInput): Promise<string
 
 /**
  * 用隐藏 iframe 调起系统打印对话框（可选用「Microsoft Print to PDF」）。
+ *
+ * 注意：空 iframe 先加载 about:blank 再 doc.write 时 onload 会触发两次，
+ * 导致 print() 叠两个对话框、取消要点两次。这里用 srcdoc + once 只打一次。
  */
 export async function exportPdfViaPrint(input: ExportDocumentInput): Promise<void> {
   try {
@@ -83,43 +86,54 @@ export async function exportPdfViaPrint(input: ExportDocumentInput): Promise<voi
       iframe.style.opacity = "0";
       iframe.style.pointerEvents = "none";
 
-      const cleanup = (): void => {
-        iframe.remove();
+      let settled = false;
+      const finish = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        try {
+          iframe.remove();
+        } catch {
+          /* ignore */
+        }
+        if (err) reject(err);
+        else resolve();
       };
 
-      iframe.onload = () => {
+      let printStarted = false;
+      const runPrint = (): void => {
+        if (printStarted) return;
+        printStarted = true;
+        const win = iframe.contentWindow;
+        if (!win) {
+          finish(new Error("无法打开打印窗口"));
+          return;
+        }
+        const onAfterPrint = (): void => {
+          win.removeEventListener("afterprint", onAfterPrint);
+          finish();
+        };
+        win.addEventListener("afterprint", onAfterPrint);
+        // 部分 WebView 取消不派发 afterprint，超时兜底避免 iframe 泄漏
+        window.setTimeout(onAfterPrint, 120_000);
         try {
-          const win = iframe.contentWindow;
-          if (!win) {
-            cleanup();
-            reject(new Error("无法打开打印窗口"));
-            return;
-          }
-          window.setTimeout(() => {
-            try {
-              win.focus();
-              win.print();
-            } finally {
-              window.setTimeout(cleanup, 1000);
-              resolve();
-            }
-          }, 200);
+          win.focus();
+          win.print();
         } catch (err) {
-          cleanup();
-          reject(err instanceof Error ? err : new Error(String(err)));
+          win.removeEventListener("afterprint", onAfterPrint);
+          finish(err instanceof Error ? err : new Error(String(err)));
         }
       };
 
+      iframe.addEventListener(
+        "load",
+        () => {
+          window.setTimeout(runPrint, 100);
+        },
+        { once: true },
+      );
+
       document.body.appendChild(iframe);
-      const doc = iframe.contentDocument;
-      if (!doc) {
-        cleanup();
-        reject(new Error("无法写入打印文档"));
-        return;
-      }
-      doc.open();
-      doc.write(html);
-      doc.close();
+      iframe.srcdoc = html;
     });
   } catch (err) {
     toastError(err, "导出 PDF 失败");

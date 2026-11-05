@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { setActiveTabContentReader, setApplyStoreContentToEditor, useTabsStore } from "../tabs";
 import { savePastedImage, toAssetUrl } from "../../ipc";
 import { createEditorExtensions, loadPlainFileLanguage } from "./core/setup";
+import { convertHtmlToMarkdown } from "./core/htmlPaste";
 import { dirName, joinPath } from "./core/paths";
 import {
   setEditorNavigateHandler,
@@ -24,7 +25,7 @@ const tabsStore = useTabsStore();
 const containerRef = ref<HTMLDivElement | null>(null);
 const renderError = ref<string | null>(null);
 const fallbackContent = ref("");
-const LARGE_DOCUMENT_CHARS = 5 * 1024 * 1024;
+const LARGE_DOCUMENT_CHARS = 20 * 1024 * 1024;
 let view: EditorView | null = null;
 /** 当前 view 对应的 tabId（切 tab 时先物化旧文档用）。 */
 let boundTabId: string | null = null;
@@ -68,6 +69,28 @@ async function onPasteImage(file: File): Promise<void> {
   view.dispatch({ changes: { from: pos, insert: `![](${relativePath})` } });
 }
 
+/**
+ * 富文本粘贴（飞书文档/Word/网页复制等）：转换失败或没有可用内容时退回浏览器
+ * 提供的 `text/plain`，避免用户感觉"粘贴没反应"。
+ */
+async function onPasteHtml(html: string, plainFallback: string): Promise<void> {
+  const tab = tabsStore.activeTab;
+  if (!tab || !view) return;
+  let markdown = "";
+  try {
+    markdown = await convertHtmlToMarkdown(html, { markdownFilePath: tab.filePath });
+  } catch (err) {
+    console.warn("[markmfy] 富文本粘贴转换失败，退回纯文本", err);
+  }
+  const insertText = markdown.trim() ? markdown : plainFallback;
+  if (!insertText || !view) return;
+  const sel = view.state.selection.main;
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: insertText },
+    selection: { anchor: sel.from + insertText.length },
+  });
+}
+
 function createState(content: string, filePath = ""): EditorState {
   const largeDocument = isLargeDocument(content);
   const bundle = createEditorExtensions(filePath, {
@@ -75,6 +98,7 @@ function createState(content: string, filePath = ""): EditorState {
     onSave: () => void onSave(),
     resolveImageSrc,
     onPasteImage: (file) => void onPasteImage(file),
+    onPasteHtml: (html, plainFallback) => void onPasteHtml(html, plainFallback),
   }, {
     largeDocument,
   });

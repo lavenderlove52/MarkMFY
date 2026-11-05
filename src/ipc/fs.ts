@@ -33,6 +33,14 @@ export function createDir(dirPath: string): Promise<void> {
 }
 
 /**
+ * 获取文件最后修改时间（epoch 毫秒）；文件不存在时返回 `null`。
+ * 用于检测文件是否在编辑器外被其它程序修改过（外部修改检测）。
+ */
+export function getFileMtime(filePath: string): Promise<number | null> {
+  return invoke<number | null>("fs_get_mtime", { filePath });
+}
+
+/**
  * 保存粘贴/拖拽的图片二进制数据到 markdown 文件同级的 assets 目录，返回相对路径。
  */
 export function savePastedImage(

@@ -24,6 +24,9 @@ export interface TableCellData {
   isHeader: boolean;
 }
 
+/** 与 `ResolveImageSrc`（livePreview.ts）同形状；这里不反向 import 避免循环依赖。 */
+export type TableResolveImageSrc = (rawPath: string) => string;
+
 /** 文档更新后把焦点还回指定单元格，避免 remount 丢焦点。 */
 let pendingTableFocus: { tableFrom: number; row: number; col: number } | null = null;
 
@@ -99,6 +102,7 @@ export class TableWidget extends WidgetType {
     readonly from: number,
     readonly to: number,
     layout: TableLayout | null = null,
+    private readonly resolveImageSrc?: TableResolveImageSrc,
   ) {
     super();
     this.cells = normalizeTableRows(rows.map((r) => r.map((c) => c.text)));
@@ -198,7 +202,7 @@ export class TableWidget extends WidgetType {
           content.replaceChildren();
           el.classList.remove("mm-table-cell--editing");
           content.contentEditable = "false";
-          if (cellText) appendInlineMarkdown(content, cellText);
+          if (cellText) appendInlineMarkdown(content, cellText, { resolveImageSrc: this.resolveImageSrc });
         };
 
         const enterEdit = (): void => {
@@ -312,9 +316,25 @@ export class TableWidget extends WidgetType {
             const measured = measureCurrentLayout(table, rowCount, colCount);
             workingLayout = measured;
             const startW = measured.cols[colIndex] || 80;
+            // 上限 = 容器可用宽度 − 其它列实际宽度之和：拖拽不允许让总宽超过容器，
+            // 否则 `.mm-table--fixed` 的 `maxWidth:100%` 会把表格按比例压窄其它列
+            //（表现为“边缘拖到页面边缘后继续拉，左边的列反而变窄”）。
+            // 注意不能拿 table.getBoundingClientRect().width 当容器宽：fixed 布局下
+            // 它等于列宽之和（width:max-content），要用外层 frame 的 clientWidth。
+            const tableWidth = frame.clientWidth;
+            const headerCells = table.querySelectorAll<HTMLElement>(
+              'tr[data-mm-table-row="0"] .mm-table-cell',
+            );
+            let otherColsWidth = 0;
+            headerCells.forEach((cell, i) => {
+              if (i !== colIndex && i < colCount) {
+                otherColsWidth += cell.getBoundingClientRect().width;
+              }
+            });
+            const maxW = Math.max(40, Math.round(tableWidth - otherColsWidth));
 
             const onMove = (ev: MouseEvent): void => {
-              const nextW = Math.max(40, Math.round(startW + (ev.clientX - startX)));
+              const nextW = Math.min(maxW, Math.max(40, Math.round(startW + (ev.clientX - startX))));
               workingLayout.cols[colIndex] = nextW;
               colEls[colIndex].style.width = `${nextW}px`;
             };
@@ -344,9 +364,12 @@ export class TableWidget extends WidgetType {
             const measured = measureCurrentLayout(table, rowCount, colCount);
             workingLayout = measured;
             const startH = measured.rows[rowIndex] || 32;
+            // 上限 = 视口高度的 80%：行高拖出可视区后既看不全也没法再操作，
+            // 与列宽同样在拖拽期就夹住，避免无意义的超高行。
+            const maxH = Math.max(24, Math.round(window.innerHeight * 0.8));
 
             const onMove = (ev: MouseEvent): void => {
-              const nextH = Math.max(24, Math.round(startH + (ev.clientY - startY)));
+              const nextH = Math.min(maxH, Math.max(24, Math.round(startH + (ev.clientY - startY))));
               workingLayout.rows[rowIndex] = nextH;
               tr.style.height = `${nextH}px`;
             };
@@ -381,16 +404,17 @@ export class TableWidget extends WidgetType {
       const frameRect = frame.getBoundingClientRect();
       if (frameRect.width === 0) return;
 
+      const edgeInset = 7;
       const rowEls = table.querySelectorAll<HTMLTableRowElement>("tr[data-mm-table-row]");
       rowEls.forEach((tr, rowIndex) => {
         const rect = tr.getBoundingClientRect();
         const midY = rect.top - frameRect.top + rect.height / 2;
-        const leftX = -7;
+        const leftX = edgeInset;
 
         if (rowIndex > 0) {
           placeButton(
             makeControlButton("×", "删除本行", "mm-table-handle mm-table-del", () => {
-              persist(
+                    persist(
                 deleteRow(this.cells, rowIndex),
                 layoutDeleteRow(workingLayout, rowIndex),
                 { row: Math.min(rowIndex, rowCount - 2), col: 0 },
@@ -404,7 +428,7 @@ export class TableWidget extends WidgetType {
 
         placeButton(
           makeControlButton("+", "在下方插入行", "mm-table-handle mm-table-add", () => {
-            persist(
+                persist(
               insertRow(this.cells, rowIndex + 1),
               layoutInsertRow(workingLayout, rowIndex + 1),
               { row: rowIndex + 1, col: 0 },
@@ -420,7 +444,7 @@ export class TableWidget extends WidgetType {
       headerCells.forEach((cell, colIndex) => {
         const rect = cell.getBoundingClientRect();
         const midX = rect.left - frameRect.left + rect.width / 2;
-        const topY = rect.top - frameRect.top - 2;
+        const topY = edgeInset;
 
         placeButton(
           makeControlButton("×", "删除本列", "mm-table-handle mm-table-del", () => {
@@ -436,7 +460,7 @@ export class TableWidget extends WidgetType {
         );
         placeButton(
           makeControlButton("+", "在右侧插入列", "mm-table-handle mm-table-add", () => {
-            persist(insertColumn(this.cells, colIndex + 1), layoutInsertColumn(workingLayout, colIndex + 1), {
+                persist(insertColumn(this.cells, colIndex + 1), layoutInsertColumn(workingLayout, colIndex + 1), {
               row: 0,
               col: colIndex + 1,
             });
@@ -448,23 +472,33 @@ export class TableWidget extends WidgetType {
       });
 
       if (headerCells[0]) {
-        const rect = headerCells[0].getBoundingClientRect();
         placeButton(
           makeControlButton("+", "在最左侧插入列", "mm-table-handle mm-table-add", () => {
-            persist(insertColumn(this.cells, 0), layoutInsertColumn(workingLayout, 0), { row: 0, col: 0 });
+                persist(insertColumn(this.cells, 0), layoutInsertColumn(workingLayout, 0), { row: 0, col: 0 });
           }),
           overlay,
-          rect.left - frameRect.left - 2,
-          rect.top - frameRect.top - 2,
+          edgeInset,
+          edgeInset,
         );
       }
+    };
+
+    let syncFrame = 0;
+    const scheduleSync = (): void => {
+      if (syncFrame !== 0) return;
+      syncFrame = requestAnimationFrame(() => {
+        syncFrame = 0;
+        syncHandles();
+      });
     };
 
     frame.append(table, overlay);
     wrap.append(toolbar, frame);
 
-    requestAnimationFrame(syncHandles);
-    wrap.addEventListener("mouseenter", () => requestAnimationFrame(syncHandles));
+    scheduleSync();
+    wrap.addEventListener("mouseenter", scheduleSync);
+    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("scroll", scheduleSync, true);
 
     if (pendingTableFocus && pendingTableFocus.tableFrom === this.from) {
       const { row, col } = pendingTableFocus;
@@ -480,9 +514,25 @@ export class TableWidget extends WidgetType {
     // 主编辑器缓存的块高度不会自动感知，必须显式 requestMeasure，
     // 否则点击表格下方内容会命中错误的行（CM6 对动态 widget 的硬性要求）。
     if (typeof ResizeObserver !== "undefined") {
-      const ro = new ResizeObserver(() => view.requestMeasure());
+      const ro = new ResizeObserver(() => {
+        view.requestMeasure();
+        scheduleSync();
+      });
       ro.observe(wrap);
-      (wrap as HTMLElement & { __mmCleanup?: () => void }).__mmCleanup = () => ro.disconnect();
+      (wrap as HTMLElement & { __mmCleanup?: () => void }).__mmCleanup = () => {
+        if (syncFrame !== 0) cancelAnimationFrame(syncFrame);
+        ro.disconnect();
+        window.removeEventListener("resize", scheduleSync);
+        window.removeEventListener("scroll", scheduleSync, true);
+        wrap.removeEventListener("mouseenter", scheduleSync);
+      };
+    } else {
+      (wrap as HTMLElement & { __mmCleanup?: () => void }).__mmCleanup = () => {
+        if (syncFrame !== 0) cancelAnimationFrame(syncFrame);
+        window.removeEventListener("resize", scheduleSync);
+        window.removeEventListener("scroll", scheduleSync, true);
+        wrap.removeEventListener("mouseenter", scheduleSync);
+      };
     }
 
     return wrap;

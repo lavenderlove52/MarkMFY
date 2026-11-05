@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { createDir, createFile, listDir, pickFolder } from "../../ipc";
+import { createDir, createFile, listDir, pickFolder, pickOpenFile } from "../../ipc";
 import { showToast, toastError } from "../../notify";
 import type { FileTreeNode } from "./types";
 
@@ -77,6 +77,29 @@ export const useWorkspaceStore = defineStore("workspace", {
         return ok ? folder : null;
       } catch (err) {
         toastError(err, "打开文件夹失败");
+        return null;
+      }
+    },
+
+    /**
+     * 弹出系统文件选择框：以其父目录为工作区打开。
+     * 成功返回 `{ workspace, file }`，取消返回 null。
+     */
+    async openFileAsWorkspace(): Promise<{ workspace: string; file: string } | null> {
+      try {
+        const file = await pickOpenFile();
+        if (!file) return null;
+        const workspace = parentDir(file);
+        if (!workspace) {
+          toastError(new Error("无法解析文件所在目录"), "打开文件失败");
+          return null;
+        }
+        const ok = await this.openFolderPath(workspace);
+        if (!ok) return null;
+        this.selectPath(file);
+        return { workspace, file };
+      } catch (err) {
+        toastError(err, "打开文件失败");
         return null;
       }
     },

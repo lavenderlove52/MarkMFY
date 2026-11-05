@@ -72,10 +72,7 @@ pub fn create_file(file_path: &str, content: &str) -> Result<(), AppError> {
     }
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(AppError::new(format!(
-                "父目录不存在：{}",
-                parent.display()
-            )));
+            return Err(AppError::new(format!("父目录不存在：{}", parent.display())));
         }
     }
     fs::write(path, content)?;
@@ -90,14 +87,29 @@ pub fn create_dir(dir_path: &str) -> Result<(), AppError> {
     }
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.is_dir() {
-            return Err(AppError::new(format!(
-                "父目录无效：{}",
-                parent.display()
-            )));
+            return Err(AppError::new(format!("父目录无效：{}", parent.display())));
         }
     }
     fs::create_dir(path)?;
     Ok(())
+}
+
+/// 获取文件最后修改时间（epoch 毫秒）。
+/// 文件不存在时返回 `Ok(None)` 而不是报错——调用方（外部修改检测）需要区分
+/// "文件被删除" 和 "读取失败"，前者不该打断保存/编辑流程。
+pub fn get_mtime(file_path: &str) -> Result<Option<i64>, AppError> {
+    let path = Path::new(file_path);
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(AppError::from(e)),
+    };
+    let modified = metadata.modified()?;
+    let millis = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok(Some(millis))
 }
 
 /// 将图片二进制数据保存到指定 markdown 文件同级的 assets 目录，返回相对路径。
@@ -191,6 +203,31 @@ mod tests {
         let file = dir.join("a.md");
         create_file(file.to_str().unwrap(), "").unwrap();
         assert!(create_file(file.to_str().unwrap(), "").is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn get_mtime_returns_none_for_missing_file() {
+        let dir = temp_dir("mtime_missing");
+        let file = dir.join("missing.md");
+        assert_eq!(get_mtime(file.to_str().unwrap()).unwrap(), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn get_mtime_changes_after_rewrite() {
+        let dir = temp_dir("mtime_change");
+        let file = dir.join("a.md");
+        write_file(file.to_str().unwrap(), "v1").unwrap();
+        let first = get_mtime(file.to_str().unwrap()).unwrap();
+        assert!(first.is_some());
+        // 直接 set_modified 到一个明显更晚的时间，避免测试环境文件系统 mtime 精度不足导致误判。
+        let later = SystemTime::now() + std::time::Duration::from_secs(5);
+        let file_handle = fs::OpenOptions::new().write(true).open(&file).unwrap();
+        file_handle.set_modified(later).unwrap();
+        let second = get_mtime(file.to_str().unwrap()).unwrap();
+        assert!(second.is_some());
+        assert_ne!(first, second);
         let _ = fs::remove_dir_all(dir);
     }
 

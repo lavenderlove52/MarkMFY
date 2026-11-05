@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWorkspaceStore, FileTree, type FileTreeNode } from "./modules/filesystem";
-import { useTabsStore, TabsBar } from "./modules/tabs";
+import { useTabsStore, TabsBar, ExternalChangeDialog } from "./modules/tabs";
 import { Editor, FormatToolbar, EditorStatusBar, isMarkdownPath, dirName } from "./modules/editor";
 import { GitPanel } from "./modules/git";
 import { SearchPanel, useSearchStore } from "./modules/search";
 import { SettingsPanel, useSettingsStore } from "./modules/settings";
 import { applyTheme } from "./modules/theme";
 import ToastHost from "./components/ToastHost.vue";
+import { toastError } from "./notify";
 import {
   CommandPalette,
   effectiveShortcut,
@@ -19,7 +20,7 @@ import {
   listCommands,
 } from "./modules/command";
 import { registerAppCommands, runCommand, syncCommandKeybindings } from "./registerCommands";
-import { getStartupOpenPaths } from "./ipc";
+import { getStartupOpenPaths, revealInDir } from "./ipc";
 
 const appWindow = getCurrentWindow();
 const workspaceStore = useWorkspaceStore();
@@ -42,6 +43,52 @@ const showFormatToolbar = computed(
 type ToolbarMenu = "file" | "view" | "search" | "export" | "tools";
 const openToolbarMenu = ref<ToolbarMenu | null>(null);
 
+/**
+ * 二级菜单（子菜单）的悬停控制：鼠标从触发按钮移到子菜单列表之间有几像素间隙，
+ * 直接用 mouseleave 关闭会导致「刚移过去就折叠、点不到」。这里改成延迟关闭，
+ * 若在延迟内重新进入（含进入子菜单本身，因为它是触发元素的 DOM 后代）就取消关闭。
+ */
+function createSubmenuHover(target: Ref<boolean>): {
+  open: () => void;
+  scheduleClose: () => void;
+  toggle: () => void;
+  reset: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const clearTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return {
+    open: () => {
+      clearTimer();
+      target.value = true;
+    },
+    scheduleClose: () => {
+      clearTimer();
+      timer = setTimeout(() => {
+        timer = null;
+        target.value = false;
+      }, 220);
+    },
+    toggle: () => {
+      clearTimer();
+      target.value = !target.value;
+    },
+    reset: () => {
+      clearTimer();
+      target.value = false;
+    },
+  };
+}
+
+const openSubmenuOpen = ref(false);
+const openSubmenuHover = createSubmenuHover(openSubmenuOpen);
+const recentSubmenuOpen = ref(false);
+const recentSubmenuHover = createSubmenuHover(recentSubmenuOpen);
+
 async function syncWindowMaximized(): Promise<void> {
   try {
     windowMaximized.value = await appWindow.isMaximized();
@@ -63,6 +110,7 @@ function syncThemeFromSettings(): void {
       fontSize: settingsStore.editorFontSize,
     },
     settingsStore.uiStyle,
+    settingsStore.editorContentWidth,
   );
 }
 
@@ -150,11 +198,30 @@ function toggleToolbarMenu(menu: ToolbarMenu): void {
 
 function closeToolbarMenu(): void {
   openToolbarMenu.value = null;
+  recentSubmenuHover.reset();
+  openSubmenuHover.reset();
 }
 
 function runToolbarAction(action: () => void | Promise<void>): void {
   closeToolbarMenu();
   void action();
+}
+
+/** 最近打开菜单展示名：优先文件夹名，完整路径作 title。 */
+function recentWorkspaceLabel(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const parts = trimmed.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
+async function openRecentWorkspace(path: string): Promise<void> {
+  closeToolbarMenu();
+  const ok = await workspaceStore.openFolderPath(path);
+  if (!ok) {
+    if (settingsStore.removeRecentWorkspacePath(path)) {
+      await settingsStore.persist();
+    }
+  }
 }
 
 async function minimizeWindow(): Promise<void> {
@@ -171,6 +238,10 @@ async function toggleMaximizeWindow(): Promise<void> {
 async function closeWindow(): Promise<void> {
   closeToolbarMenu();
   await appWindow.close();
+}
+
+function onWindowFocusCheckExternalChanges(): void {
+  void tabsStore.checkExternalChanges();
 }
 
 let uninstallKeymap: (() => void) | null = null;
@@ -249,12 +320,16 @@ onMounted(() => {
         const ok = await workspaceStore.openFolderPath(last);
         if (!ok) {
           settingsStore.setLastWorkspacePath("");
+          settingsStore.removeRecentWorkspacePath(last);
           await settingsStore.persist();
         }
       }
     }
   })();
   window.addEventListener("click", closeToolbarMenu);
+  // 窗口重新获得焦点时检测已打开文件是否被其它程序改过（最常见的外部修改场景：
+  // 切到别的编辑器/工具改完文件再切回来）。
+  window.addEventListener("focus", onWindowFocusCheckExternalChanges);
 });
 
 onBeforeUnmount(() => {
@@ -266,6 +341,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("mousemove", onResizeMove);
   window.removeEventListener("mouseup", onResizeUp);
   window.removeEventListener("click", closeToolbarMenu);
+  window.removeEventListener("focus", onWindowFocusCheckExternalChanges);
   document.body.classList.remove("mm-resizing-col");
 });
 
@@ -273,9 +349,15 @@ watch(
   () => workspaceStore.rootPath,
   (path) => {
     if (!path || !settingsStore.loaded) return;
-    if (settingsStore.lastWorkspacePath === path) return;
-    settingsStore.setLastWorkspacePath(path);
-    void settingsStore.persist();
+    let dirty = false;
+    if (settingsStore.lastWorkspacePath !== path) {
+      settingsStore.setLastWorkspacePath(path);
+      dirty = true;
+    }
+    if (settingsStore.touchRecentWorkspacePath(path)) {
+      dirty = true;
+    }
+    if (dirty) void settingsStore.persist();
   },
 );
 
@@ -285,6 +367,7 @@ watch(
     settingsStore.uiStyle,
     settingsStore.editorFontFamily,
     settingsStore.editorFontSize,
+    settingsStore.editorContentWidth,
   ],
   () => {
     syncThemeFromSettings();
@@ -327,6 +410,15 @@ async function createFolderNear(node: FileTreeNode | null): Promise<void> {
   await workspaceStore.createFolder(name.trim() || null);
 }
 
+async function onRevealInDir(node: FileTreeNode): Promise<void> {
+  workspaceStore.selectPath(node.path);
+  try {
+    await revealInDir(node.path, node.isDir);
+  } catch (err) {
+    toastError(err, "打开文件所在目录失败");
+  }
+}
+
 async function onCreateFileToolbar(): Promise<void> {
   await createMarkdownNear(null);
 }
@@ -355,13 +447,46 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             文件
           </button>
           <div v-if="openToolbarMenu === 'file'" class="app-shell__menu-list">
-            <button
-              type="button"
-              class="app-shell__menu-item app-shell__menu-item--primary"
-              @click="runToolbarAction(() => runCommand('workspace.openFolder'))"
+            <div
+              class="app-shell__menu-item--has-sub"
+              @mouseenter="openSubmenuHover.open()"
+              @mouseleave="openSubmenuHover.scheduleClose()"
             >
-              打开文件夹
-            </button>
+              <button
+                type="button"
+                class="app-shell__menu-item app-shell__menu-item--primary"
+                :class="{ 'app-shell__menu-item--sub-open': openSubmenuOpen }"
+                @click.stop="openSubmenuHover.toggle()"
+              >
+                <span>打开</span>
+                <span class="app-shell__menu-caret" aria-hidden="true">▸</span>
+              </button>
+              <div
+                v-if="openSubmenuOpen"
+                class="app-shell__submenu-list"
+                role="menu"
+                aria-label="打开文件或文件夹"
+                @mouseenter="openSubmenuHover.open()"
+                @mouseleave="openSubmenuHover.scheduleClose()"
+              >
+                <button
+                  type="button"
+                  class="app-shell__menu-item"
+                  role="menuitem"
+                  @click="runToolbarAction(() => runCommand('workspace.openFolder'))"
+                >
+                  打开文件夹
+                </button>
+                <button
+                  type="button"
+                  class="app-shell__menu-item"
+                  role="menuitem"
+                  @click="runToolbarAction(() => runCommand('workspace.openFile'))"
+                >
+                  打开文件
+                </button>
+              </div>
+            </div>
             <button
               type="button"
               class="app-shell__menu-item"
@@ -378,6 +503,42 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             >
               新建文件夹
             </button>
+            <div
+              class="app-shell__menu-item--has-sub"
+              @mouseenter="recentSubmenuHover.open()"
+              @mouseleave="recentSubmenuHover.scheduleClose()"
+            >
+              <button
+                type="button"
+                class="app-shell__menu-item"
+                :class="{ 'app-shell__menu-item--sub-open': recentSubmenuOpen }"
+                :disabled="settingsStore.recentWorkspacePaths.length === 0"
+                @click.stop="recentSubmenuHover.toggle()"
+              >
+                <span>最近打开</span>
+                <span class="app-shell__menu-caret" aria-hidden="true">▸</span>
+              </button>
+              <div
+                v-if="recentSubmenuOpen && settingsStore.recentWorkspacePaths.length > 0"
+                class="app-shell__submenu-list"
+                role="menu"
+                aria-label="最近打开的文件夹"
+                @mouseenter="recentSubmenuHover.open()"
+                @mouseleave="recentSubmenuHover.scheduleClose()"
+              >
+                <button
+                  v-for="recentPath in settingsStore.recentWorkspacePaths"
+                  :key="recentPath"
+                  type="button"
+                  class="app-shell__menu-item app-shell__menu-item--recent"
+                  role="menuitem"
+                  :title="recentPath"
+                  @click="void openRecentWorkspace(recentPath)"
+                >
+                  {{ recentWorkspaceLabel(recentPath) }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -569,6 +730,7 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
           @select="onSelectNode"
           @create-file="createMarkdownNear"
           @create-folder="createFolderNear"
+          @reveal-in-dir="onRevealInDir"
         />
         <div v-else class="app-shell__empty">打开一个文件夹开始编辑</div>
       </aside>
@@ -642,6 +804,14 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
     />
     <CommandPalette :open="commandPaletteOpen" @close="closeCommandPalette" />
     <ToastHost />
+    <ExternalChangeDialog
+      v-if="tabsStore.externalConflict"
+      :file-name="tabsStore.externalConflict.fileName"
+      :has-local-edits="tabsStore.externalConflict.hasLocalEdits"
+      @keep-current="tabsStore.keepCurrentOverDisk(tabsStore.externalConflict.tabId)"
+      @load-disk="tabsStore.loadDiskVersion(tabsStore.externalConflict.tabId)"
+      @dismiss="tabsStore.dismissExternalConflict()"
+    />
   </div>
 </template>
 
@@ -768,6 +938,47 @@ body.mm-resizing-col * {
 
 .app-shell__menu-item:disabled:hover {
   background: transparent;
+}
+
+.app-shell__menu-item--has-sub {
+  position: relative;
+}
+
+.app-shell__menu-item--has-sub > .app-shell__menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-shell__menu-item--sub-open {
+  background: var(--mm-color-hover);
+}
+
+.app-shell__menu-caret {
+  color: var(--mm-color-text-muted);
+  font-size: 0.85em;
+}
+
+.app-shell__submenu-list {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 4px);
+  z-index: 21;
+  min-width: 200px;
+  max-width: 360px;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-md);
+  background: var(--mm-color-surface-elevated);
+  box-shadow: var(--mm-shadow-overlay);
+}
+
+.app-shell__menu-item--recent {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-shell__drag {

@@ -23,6 +23,7 @@
 import {
   EditorSelection,
   EditorState,
+  Facet,
   StateField,
   type Extension,
   type Range,
@@ -63,6 +64,15 @@ import {
 import { decorateControlledHtml } from "./htmlPreview";
 
 export type ResolveImageSrc = (rawPath: string) => string;
+
+/**
+ * `blockDecorationsField` 是模块级 StateField（非按 view 创建），拿不到
+ * `livePreviewExtension(resolveImageSrc)` 的闭包参数，因此用 Facet 传递，
+ * 让表格 Widget 也能像正文一样把相对路径图片解析成可加载的 URL。
+ */
+const resolveTableImageSrcFacet = Facet.define<ResolveImageSrc, ResolveImageSrc>({
+  combine: (values) => values[values.length - 1] ?? ((p) => p),
+});
 
 const HEADING_NAMES = [
   "ATXHeading1",
@@ -439,7 +449,15 @@ function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
 
   const lineFrom = hit.lineFrom;
   const lineTo = hit.lineTo;
+  // midY 必须取标题行 DOM 元素的几何中心：coordsAtPos(lineTo) 在字号放大的标题上
+  // 会给出偏下甚至落进下一行命中区的坐标，posAtCoords 反查回来就越过 lineTo，
+  // 导致 anchor 被 fallback 钉死在 contentStart（表现为“标题正文点哪都只能点到行首”）。
   const midY = (() => {
+    const lineEl = target.closest(".cm-line");
+    if (lineEl) {
+      const rect = lineEl.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    }
     const c0 = view.coordsAtPos(lineFrom);
     const c1 = view.coordsAtPos(lineTo);
     if (c0 && c1) return (Math.min(c0.top, c1.top) + Math.max(c0.bottom, c1.bottom)) / 2;
@@ -453,9 +471,11 @@ function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
   const contentStart = headingContentStart(view.state, lineFrom, lineTo) ?? lineFrom;
 
   const mappedOk = clickPos != null && clickPos >= lineFrom && clickPos <= lineTo;
+  // 要求选区与标题行正文有真正重叠（而非仅“覆盖过第 0 字符”），否则任何位置
+  // 的旧选区都会被误判成 alreadyOnLine，把本应修正的点击放行给 CM 默认行为。
   const alreadyOnLine =
     mappedOk &&
-    view.state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
+    view.state.selection.ranges.some((r) => r.from <= lineTo && r.to >= contentStart);
 
   // 已点在标题行正文上且选区已正确时交给 CM 默认行为
   if (mappedOk && alreadyOnLine && clickPos! >= contentStart) {
@@ -622,19 +642,41 @@ function handleBlockMath(
   return true;
 }
 
+/**
+ * 按未转义 `|` 把表格一行的原文切分成单元格。
+ * 不能靠语法树的 TableCell 节点：@lezer/markdown 对完全为空的单元格不生成任何节点
+ * （新增行 `|  |  |` 整行没有一个 TableCell），而「+列」产生的空尾单元格同样会消失，
+ * 导致表格 Widget 重建后新行列凭空蒸发——表现为点了按钮没反应。
+ */
+function splitTableRowText(lineText: string): string[] {
+  let text = lineText.trim();
+  if (text.startsWith("|")) text = text.slice(1);
+  if (text.endsWith("|") && !text.endsWith("\\|")) text = text.slice(0, -1);
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\\" && text[i + 1] === "|") {
+      current += "\\|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
 function parseTableRows(state: EditorState, tableNode: SyntaxNodeRef): TableCellData[][] {
   const rows: TableCellData[][] = [];
   for (let child = tableNode.node.firstChild; child; child = child.nextSibling) {
     if (child.name !== "TableHeader" && child.name !== "TableRow") continue;
     const isHeader = child.name === "TableHeader";
-    const cells: TableCellData[] = [];
-    for (let cell = child.firstChild; cell; cell = cell.nextSibling) {
-      if (cell.name !== "TableCell") continue;
-      cells.push({
-        text: state.doc.sliceString(cell.from, cell.to).trim(),
-        isHeader,
-      });
-    }
+    const lineText = state.doc.lineAt(child.from).text;
+    const cells = splitTableRowText(lineText).map((text) => ({ text, isHeader }));
     if (cells.length > 0) rows.push(cells);
   }
   return rows;
@@ -681,7 +723,7 @@ function handleTable(node: SyntaxNodeRef, state: EditorState, ranges: Range<Deco
   if (rows.length === 0) return false;
   ranges.push(
     Decoration.replace({
-      widget: new TableWidget(rows, from, to, layout),
+      widget: new TableWidget(rows, from, to, layout, state.facet(resolveTableImageSrcFacet)),
       block: true,
     }).range(from, to),
   );
@@ -1033,6 +1075,21 @@ async function handleLinkClick(view: EditorView, event: MouseEvent): Promise<voi
   await openUrl(url);
 }
 
+/** 单击样式徽标（htmlPreview.ts 的 SpanBadgeWidget）选中整个 span 内容。 */
+function handleStyleBadgeMouseDown(event: MouseEvent, view: EditorView): boolean {
+  const target = event.target as HTMLElement | null;
+  const badge = target?.closest?.(".mm-style-badge") as HTMLElement | null;
+  if (!badge) return false;
+  const from = Number(badge.dataset.spanFrom);
+  const to = Number(badge.dataset.spanTo);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  view.dispatch({ selection: { anchor: from, head: to } });
+  view.focus();
+  return true;
+}
+
 /** Live preview: decoration ViewPlugin + link click + base theme. */
 export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extension {
   const plugin = ViewPlugin.fromClass(
@@ -1070,6 +1127,7 @@ export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extensio
 
   const clickHandler = EditorView.domEventHandlers({
     mousedown(event, view) {
+      if (handleStyleBadgeMouseDown(event, view)) return true;
       if (handleHeadingMouseDown(view, event)) return true;
       if (handleTextLineMouseDown(view, event)) return true;
       void handleLinkClick(view, event);
@@ -1122,6 +1180,7 @@ export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extensio
   );
 
   return [
+    resolveTableImageSrcFacet.of(resolveImageSrc),
     tableSourceEditField,
     blockDecorationsField,
     plugin,
@@ -1179,6 +1238,30 @@ const livePreviewTheme = EditorView.baseTheme({
     borderRadius: "2px",
     padding: "0 1px",
   },
+  /* span 样式徽标：字号数字 / 颜色小色块；双击选中整个 span 内容 */
+  ".mm-style-badge": {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "2px",
+    verticalAlign: "baseline",
+    margin: "0 1px",
+    padding: "0 3px",
+    borderRadius: "3px",
+    background: "var(--mm-color-bg-muted)",
+    border: "1px solid var(--mm-color-border)",
+    color: "var(--mm-color-text-muted)",
+    fontSize: "0.72em",
+    lineHeight: "1.1",
+    cursor: "default",
+    userSelect: "none",
+  },
+  ".mm-style-badge__swatch": {
+    display: "inline-block",
+    width: "8px",
+    height: "8px",
+    borderRadius: "2px",
+    border: "1px solid var(--mm-color-border)",
+  },
   ".mm-html-align": { display: "block" },
   ".mm-math": {
     fontSize: "1em",
@@ -1226,6 +1309,7 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".mm-code-block__toolbar": {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: "6px",
     marginBottom: "4px",
@@ -1303,9 +1387,9 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".mm-table-frame": {
     position: "relative",
-    /* 给边缘悬浮按钮留一点点外溢空间，不占表格单元格 */
-    marginLeft: "14px",
-    marginTop: "14px",
+    /* 给边缘悬浮按钮留出可命中的空间，避免控件依赖 frame 外溢坐标 */
+    paddingLeft: "14px",
+    paddingTop: "14px",
   },
   ".mm-table-overlay": {
     position: "absolute",
@@ -1314,7 +1398,7 @@ const livePreviewTheme = EditorView.baseTheme({
     pointerEvents: "none",
     opacity: "0",
     transition: "opacity 0.12s ease",
-    zIndex: "3",
+    zIndex: "5",
   },
   ".mm-table-wrap:hover .mm-table-overlay, .mm-table-wrap:focus-within .mm-table-overlay": {
     opacity: "1",
@@ -1379,6 +1463,7 @@ const livePreviewTheme = EditorView.baseTheme({
     padding: "0",
     cursor: "pointer",
     pointerEvents: "auto",
+    zIndex: "6",
     boxShadow: "var(--mm-shadow-panel)",
   },
   ".mm-table-add:hover": {
@@ -1410,6 +1495,18 @@ const livePreviewTheme = EditorView.baseTheme({
     background: "var(--mm-color-bg-muted)",
     borderRadius: "var(--mm-radius-sm)",
     padding: "0 4px",
+  },
+  ".mm-inline-image": {
+    display: "inline-block",
+    maxWidth: "100%",
+    maxHeight: "160px",
+    verticalAlign: "middle",
+    borderRadius: "var(--mm-radius-sm)",
+    margin: "2px 0",
+  },
+  ".mm-inline-link": {
+    color: "var(--mm-color-accent)",
+    textDecoration: "underline",
   },
   ".mm-mermaid": {
     position: "relative",
@@ -1466,16 +1563,27 @@ const livePreviewTheme = EditorView.baseTheme({
     position: "absolute",
     top: "4px",
     right: "4px",
+    maxWidth: "calc(100% - 8px)",
     display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
     gap: "4px",
     zIndex: "2",
     opacity: "0",
+    // 不可见时不能拦截鼠标事件，否则会挡住下方拖拽/悬浮，
+    // 且用户「点」到图上其实点在了这个隐形按钮上（Task086 复制按钮反馈的 bug）
+    pointerEvents: "none",
     transition: "opacity 0.15s ease",
   },
   ".mm-table-wrap:hover .mm-widget-toolbar, .mm-mermaid:hover .mm-widget-toolbar, .mm-image-wrap:hover .mm-widget-toolbar, .mm-code-block:hover .mm-widget-toolbar, .mm-code-block:focus-within .mm-widget-toolbar":
     {
       opacity: "1",
+      pointerEvents: "auto",
     },
+  // 代码块工具栏默认就是半透明可见（非 0），必须始终可点，用更高特异性覆盖上面的 none
+  ".mm-code-block .mm-code-block__toolbar": {
+    pointerEvents: "auto",
+  },
   ".mm-widget-btn": {
     border: "1px solid var(--mm-color-border)",
     background: "var(--mm-color-surface)",
@@ -1488,6 +1596,37 @@ const livePreviewTheme = EditorView.baseTheme({
   },
   ".mm-widget-btn:hover": {
     background: "var(--mm-color-hover)",
+  },
+  ".mm-widget-menu": {
+    position: "relative",
+  },
+  ".mm-widget-menu__list": {
+    position: "absolute",
+    top: "calc(100% + 4px)",
+    right: "0",
+    zIndex: "5",
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    minWidth: "132px",
+    padding: "4px",
+    background: "var(--mm-color-surface-elevated, var(--mm-color-surface))",
+    border: "1px solid var(--mm-color-border)",
+    borderRadius: "var(--mm-radius-sm)",
+    boxShadow: "var(--mm-shadow-panel)",
+    // 打开后即使鼠标离开图表主体（外层工具栏 opacity/pointer-events 复位），菜单本身仍要可点
+    pointerEvents: "auto",
+  },
+  // JS 用 `menu.hidden = true` 关闭菜单：上面这条规则的 class 选择器特异性和浏览器
+  // 默认的 `[hidden]{display:none}` 相同，作者样式会覆盖 UA 样式导致 display:flex
+  // 一直生效——鼠标一靠近图表让外层工具栏 opacity 从 0 变 1 时，「关闭」的菜单就跟着露出来。
+  // 用属性选择器叠加提高特异性，显式盖掉上面的 display:flex。
+  ".mm-widget-menu__list[hidden]": {
+    display: "none",
+  },
+  ".mm-widget-menu__item": {
+    width: "100%",
+    textAlign: "left",
   },
   ".mm-source-editing": {
     backgroundColor: "var(--mm-color-accent-soft)",

@@ -12,8 +12,10 @@ const emit = defineEmits<{ close: [] }>();
 const query = ref("");
 const activeIndex = ref(0);
 const inputRef = ref<HTMLInputElement | null>(null);
+/** 打开时快照：listCommands() 非响应式，不能直接放进 computed */
+const catalog = ref<CommandListItem[]>([]);
 
-const results = computed((): CommandListItem[] => filterCommands(listCommands(), query.value));
+const results = computed((): CommandListItem[] => filterCommands(catalog.value, query.value));
 
 watch(
   () => props.open,
@@ -21,9 +23,10 @@ watch(
     if (!open) return;
     query.value = "";
     activeIndex.value = 0;
+    // 每次打开重新拉取，避免 setup 阶段命令尚未 register 时缓存成空列表
+    catalog.value = listCommands();
     await nextTick();
     inputRef.value?.focus();
-    inputRef.value?.select();
   },
 );
 
@@ -110,7 +113,7 @@ function onKeydown(e: KeyboardEvent): void {
   display: flex;
   justify-content: center;
   padding-top: min(18vh, 120px);
-  background: rgba(15, 23, 42, 0.38);
+  background: color-mix(in srgb, var(--mm-color-text) 28%, transparent);
   backdrop-filter: blur(2px);
 }
 
@@ -135,6 +138,7 @@ function onKeydown(e: KeyboardEvent): void {
   padding: 16px 18px;
   font-size: 16px;
   outline: none;
+  flex-shrink: 0;
 }
 
 .mm-cmd-list {
@@ -142,6 +146,8 @@ function onKeydown(e: KeyboardEvent): void {
   margin: 0;
   padding: 8px;
   overflow: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .mm-cmd-empty {

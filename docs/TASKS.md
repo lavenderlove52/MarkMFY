@@ -742,3 +742,105 @@
 - 依赖：Task036, Task037
 - 状态：已完成
 - 实现说明：扩展 `applyTheme` 四套 token；settings/Rust 持久化 `uiStyle`；默认 fresh。
+
+### Task083 导出 PDF：打印取消需点两次 + 宽表被裁切
+- 输入：用户反馈打印对话框取消要点两次；宽表格右侧接口路径打印不完整
+- 根因：1) iframe `onload` 触发两次导致 `print()` 叠两个对话框；2) `table { display:block; overflow-x:auto }` 在打印时裁切超出纸宽内容
+- 输出：`srcdoc` + once/`printStarted` 只弹一次打印；导出 CSS 表格恢复 `display:table`，单元格 `overflow-wrap` 换行适配纸宽
+- 验收：取消一次即可关闭；宽表列内容完整可见（可换行变高，不再横向裁切）；`vue-tsc`/`eslint` 通过
+- 依赖：Task046
+- 状态：已完成
+- 实现说明：`exportActions.ts` 打印守卫；`exportStyles.ts` 表格/打印样式。
+
+### Task084 文件菜单「最近打开」工作区目录（最多 50）
+- 输入：用户需求：文件菜单增加最近打开；记录最近 50 个目录；去重；重新打开置顶；配置落在安装目录
+- 输出：`recentWorkspacePaths` 写入安装目录 `config/settings.json`；文件菜单子项「最近打开」；打开成功即 MRU 更新
+- 验收：打开不同目录后菜单按新→旧列出；重复打开不增加条目且置顶；超过 50 条裁掉最旧；失效路径点击后从列表移除；`vue-tsc`/`eslint`/`cargo test` 通过
+- 依赖：Task003, Task034
+- 状态：已完成
+- 实现说明：settings 类型/store/Rust 持久化；`App.vue` 子菜单与 `rootPath` watch 写入。
+- 修复（用户反馈"历史目录打不开，鼠标移过去就折叠回去了"）：根因是触发按钮和子菜单列表之间用 `left: calc(100% + 4px)` 隔了 4px 间隙，鼠标从按钮移向子菜单要跨过这段不属于悬停容器的空白区域，一进入间隙就先触发了 `mouseleave` 关闭。改为 `createSubmenuHover` 延迟关闭（220ms 内重新进入——包括进入子菜单本身，会取消关闭），「打开」「最近打开」两个子菜单一并修复。
+
+### Task085 文件「打开」支持文件夹与文件
+- 输入：用户需求：原「打开文件夹」既可开目录也可开文件
+- 说明：系统原生对话框无法一次同时选文件/文件夹，故菜单改为「打开」子项：打开文件夹 / 打开文件
+- 输出：`pickOpenFile`；`openFileAsWorkspace`；命令 `workspace.openFile`（Ctrl+O）；打开文件时以父目录为工作区并打开该文件
+- 验收：可选文件夹作工作区；可选文件并打开编辑；取消无副作用；`vue-tsc`/`eslint` 通过
+- 依赖：Task003, Task007
+- 状态：已完成
+- 实现说明：`ipc/dialog.ts` + filesystem store + `registerCommands` + `App.vue` 子菜单。
+
+### Task086 代码块 / 流程图工具栏新增「复制源码」「复制内容」
+- 输入：用户需求：代码块与 Mermaid 流程图工具栏增加复制源码、复制内容按钮
+- 设计确认（与用户核对后）：
+  - 代码块：复制源码=含 ` ```lang ` 围栏的完整 Markdown 片段；复制内容=仅代码正文（不含围栏），可直接粘到终端/IDE
+  - 流程图：复制源码=围栏原文（不含缩放/字号 meta 注释）；复制内容为小菜单，含「复制为图片」（PNG 写入系统剪贴板，可粘到聊天工具/Word/PPT）「复制为 SVG」「复制为源码文本」（不含围栏）
+- 输出：`widgetDom.ts` 新增 `copyTextToClipboard` / `copySvgAsPngToClipboard` / `createToolbarMenuButton`；`codeBlockWidget.ts`、`mermaidWidget.ts` 接入按钮；复制结果走现有 Toast 提示
+- 验收：代码块两个按钮分别复制围栏文本/纯正文；流程图「复制源码」得到围栏文本；「复制内容」菜单三项分别得到图片(剪贴板可粘为图)/SVG 文本/纯源码文本；失败有 Toast；`vue-tsc`/`eslint` 通过
+- 依赖：Task016（代码块）、Task070 附近的 Mermaid Widget（既有实现）
+- 状态：已完成
+- 实现说明：不引入新依赖，直接用浏览器原生 `navigator.clipboard` + Canvas 栅格化；小菜单为纯 DOM 悬浮列表，样式加在 `livePreview.ts` baseTheme。
+- 修复（用户反馈"复制为图片"很慢且点击无反应）：根因两点——① `img.onload` 内 `drawImage`/`toBlob` 若抛错不会被外层 `try/catch` 捕获，Promise 永不 settle，导致挂起；② 原先「先 await 转成 PNG，再调用 `clipboard.write()`」，多个异步跳步后浏览器/WebView 的"用户激活态"可能已过期，导致 `write()` 静默失败。改为：`copySvgAsPngToClipboard` 一进入就同步调用 `navigator.clipboard.write()`，把耗时的栅格化过程放进 `ClipboardItem` 接受的 `Promise<Blob>` 里；栅格化步骤全部改为 reject 而非吞掉错误；加 8s 超时兜底；限制输出长边像素（大图自动降倍）避免过慢；点击后先弹「正在生成图片…」提示避免看起来无响应。
+- 二次修复（用户反馈：①复制图片仍报错；②鼠标一放到图上，「复制内容」菜单就自动打开了）：
+  - 根因②：`.mm-widget-toolbar` 不可见时（`opacity:0`）没有禁用 pointer-events，仍能拦截点击；新增按钮变多后工具栏换行变高，覆盖住了更多图表区域，用户在图上点击/拖拽时实际点在了这个隐形按钮上。修复：默认 `pointer-events:none`，hover 时才 `auto`；代码块工具栏本来就是半透明常显，用更高特异性选择器单独保证其始终可点；下拉菜单本身固定 `pointer-events:auto`（避免打开后鼠标移出主体就点不到）。
+  - 根因①排查：暂无法在当前环境复现具体报错原因，先把 `copySvgAsPngToClipboard` 改为不吞错误（`catch` 后 `console.error` 并 `throw`），调用处用真实错误消息（`toastError(err, ...)`）展示，而不是笼统的"图表可能过大"文案，方便下次直接看到浏览器/WebView 报的具体原因再定位。
+- 三次修复（靠上面暴露的真实报错定位到了）：报错为 `Failed to execute 'toBlob' on 'HTMLCanvasElement': Tainted canvases may not be exported.`。根因：Mermaid 默认用 `<foreignObject>` 承载文字标签（HTML label），Chromium 对「含 `<foreignObject>` 的 SVG 通过 `blob:` URL 加载后画到 canvas」会把画布标记为"脏"（即使内容完全同源、无跨域资源），导出必然抛 SecurityError；这是 Chromium 已知且长期存在的行为差异（`data:` URI 加载则不受此限制）。修复：`rasterizeSvgToPngBlob` 改用 `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}` 加载 SVG，不再经过 `URL.createObjectURL`。
+- 四次修复（用户反馈：鼠标只是移到图表上悬停，「复制内容」的下拉菜单就自动展开了，并非点击）：根因是 CSS 特异性问题——`.mm-widget-menu__list` 这条类选择器规则里写了 `display: flex`，其特异性和浏览器 UA 样式的 `[hidden]{display:none}` 相同，作者样式在层叠中优先于 UA 样式，所以 JS 用 `menu.hidden = true` 关闭菜单时该元素其实一直是 `display:flex`（只是因为父级 `.mm-widget-toolbar` 悬停前 `opacity:0` 才看不见）；一旦鼠标移到图表上让工具栏 `opacity` 变成 1，这个「已关闭」的菜单也跟着露出来，看起来像"一悬停就展开"。修复：新增 `.mm-widget-menu__list[hidden] { display: none }`（属性选择器提高特异性）显式覆盖，`hidden` 时强制不渲染。
+
+### Task087 阅读区域宽度可调 + 内部组件宽度跟随
+- 输入：用户需求："中间的阅读区域，我希望可以调整宽度，同时也可以调整内部组件的最大宽度，即表格、图、代码块等，所有组件都可以调整到阅读区域最大宽度"
+- 背景：`.cm-content` 原有 `max-width` 由主题 token（`ThemeTokens.editorContentWidth`）固定写死（fresh 820px / classic 980px），用户无法调整；表格/图片/流程图/代码块的宽度样式（`.mm-table` `width:100%`、`.mm-image-wrap` `max-width:100%`、`.mm-mermaid` 内部按 `wrap.clientWidth` 自适应）本就以 `.cm-content` 为基准做百分比/自适应，因此只要把阅读区域宽度做成可调，内部组件会自动跟随，无需分别改造。
+- 输出：
+  - `settings/types.ts`：`AppSettings` 新增 `editorContentWidth`（px，默认 820），新增 `EDITOR_CONTENT_WIDTH_MIN`(640)/`MAX`(1800)/`UNLIMITED`(0) 常量与 `normalizeEditorContentWidth`（0 表示不限宽度撑满可用空间，否则夹紧范围）
+  - `settings/store.ts`：state/getters/load/patch 接入新字段；新增 `setEditorContentWidth` action
+  - `theme/applyTheme.ts`：移除主题 token 里写死的 `editorContentWidth`，改为 `applyTheme(theme, editor?, uiStyle?, contentWidth?)` 第四参数，写入 CSS 变量 `--mm-editor-content-width`（`contentWidth<=0` 时写 `none` 即不限宽度）
+  - `App.vue`：`syncThemeFromSettings` 传入 `settingsStore.editorContentWidth`；监听该字段变化实时生效
+  - `settings/components/SettingsPanel.vue`：「编辑器」分组新增"阅读区域宽度"滑杆（640–1800px，步进 20）+「不限宽度」开关 chip，改动即时生效并按现有 400ms 防抖持久化
+- 验收：设置面板拖动滑杆时编辑区 `.cm-content` 最大宽度实时变化；表格/图片/Mermaid/代码块最大宽度随之同步变宽变窄；勾选「不限宽度」时阅读区撑满编辑器可用宽度；刷新/重启后设置保留；`vue-tsc`/`eslint` 通过
+- 依赖：Task036（Theme 模块）、Task082（主题包）
+- 状态：已完成
+- 实现说明：未改动表格/图片/Mermaid/代码块自身的 CSS（它们已是相对 `.cm-content` 的 `100%`/自适应布局，天然跟随），只新增了「阅读区域宽度」这一个可调变量作为唯一控制点，符合最小改动原则。
+
+### Task088 富文本粘贴（飞书/Word/网页）：图片与表格保真转换
+- 输入：用户反馈"飞书复制过来的图片无法展示"+"表格样式也没了"
+- 根因排查：项目原先**没有** HTML→Markdown 的粘贴管线，`paste` 事件只识别剪贴板里的 `image/*` 文件（Task022），其余一律走浏览器/CM6 默认的 `text/plain` 粘贴。飞书等站点复制内容时，`text/plain` 会把图片退化成"[图片]"占位文字、把 `<table>` 拍扁成缩进列表——这正是截图里看到的现象。真正的图片链接和表格结构其实都在剪贴板的 `text/html` 里，但代码从未读取过它。
+- 输出：
+  - 新增 `src/modules/editor/core/htmlPaste.ts`：不引入第三方库（如 turndown），自己写 HTML→Markdown 转换器
+    - `isRichHtmlFragment(html)`：粗筛该 HTML 是否含真实语义标签（`table/img/ul/ol/h1-6/blockquote/pre/a[href]/strong/b/em/i/del/s`）。编辑器内部复制粘贴自身内容时浏览器也会附带一份 `text/html`（纯文本套 `<span style>`，无真实语义标签），这一步保证内部复制粘贴行为不受影响，只有外部富文本才走新逻辑
+    - `convertHtmlToMarkdown(html, ctx)`：按块级/行内边界递归转换——标题/段落/粗斜体删除线/行内代码/链接/列表（含嵌套）/引用块/分割线/围栏代码块/表格（复用 `tableModel.ts` 的 `serializeTable`/`escapeTableCell`，与既有可视化表格模型保持一致）
+    - 图片：`data:` 直接解码落盘到 assets；`http(s)` 尝试 `fetch` 下载落盘（8s 超时，多图并发），失败（防盗链/需登录态等）时退回保留原始外链让 `<img>` 直接展示；两种情况都调用既有 `savePastedImage` IPC，不新增 Rust 侧改动
+  - `src/modules/editor/core/setup.ts`：`EditorCallbacks` 新增 `onPasteHtml`；`paste` 事件优先读 `text/html`，命中 `isRichHtmlFragment` 才走新逻辑，否则保持原有图片文件/默认文本粘贴顺序
+  - `src/modules/editor/Editor.vue`：新增 `onPasteHtml` 实现，转换失败或没有可用内容时退回浏览器提供的 `text/plain`，避免粘贴看起来没反应；插入时正确替换当前选区（原 `onPasteImage` 只在光标处插入，未处理有选区的情况，这次顺带按正确语义实现新路径，不改动旧路径）
+- 验收：从飞书文档复制一段包含图片和表格的内容粘贴进编辑器——图片能正常显示（本地落盘或保留可用外链），表格转换为可被 Live Preview 识别的 GFM 管道表格并保留表格 Widget 编辑能力；从编辑器内部复制粘贴文本行为不受影响；`vue-tsc`/`eslint` 通过
+- 已知局限（转换器 MVP 范围，见文件顶部注释）：不处理合并单元格（colspan/rowspan）、不支持嵌套表格、不识别仅靠行内 `style` 模拟的标题/加粗（没有真实语义标签时退化为纯文本）
+- 依赖：Task021/Task022（`save_pasted_image` 与既有图片粘贴）、`tableModel.ts`（既有 GFM 表格模型）
+- 状态：已完成
+- 实现说明：未新增依赖、未改动 Rust 侧；仅新增一个内部文件 + 在既有粘贴管线里插入一个更高优先级的分支，不影响原有图片粘贴/纯文本粘贴路径。
+- 追加修复（用户反馈："1.标题格式没有识别，应该是连续的1级标题，2，表格中的图片无法显示，并且格式丢失"）：
+  1. **标题被识别成列表**：飞书文档"标题自动编号"在导出剪贴板 HTML 时不会稳定序列化成 `<h1>`~`<h6>`，而是拍扁成"只有一个 `<li>`"的独立 `<ol>/<ul>`（装饰性序号，且每个标题各自独立从 1 开始——这也是截图里两个标题都显示"1."而非"1./2."的原因）。`htmlPaste.ts` 新增 `looksLikeFeishuHtml`（粗筛剪贴板 HTML 是否带 `lark`/`feishu` 字样）+ `tryPromoteSingletonListToHeading`：仅在飞书来源、且列表恰好只有一个 `<li>`、该 `<li>` 不含嵌套子列表时，才把它当作被拍扁的标题还原成 `# 文本`；命中条件很窄，避免误伤其它站点真实的单条目列表
+  2. **表格里的图片/格式丢失**：原实现用 `inlineToMarkdown` 抽取单元格内容，遇到单元格内"多段落/多张图片各占一段/嵌套列表"（飞书表格单元格常见）时，会把它们当行内内容硬拼在一起，导致列表序号丢失、多张图片的 `![]()` 语法无分隔地挤成一串。改为 `cellToMarkdown`：先用 `collectBlocks` 按块级边界正确切分（保留列表序号、每张图片独立），再用 `<br>` 拼接多个块（GFM 表格单元格不能有真实换行，`<br>` 是通用兼容写法）
+  3. **表格单元格不渲染图片/`<br>`/链接**：即使 Markdown 源码已经正确，`TableWidget` 一直用 `appendInlineMarkdown` 把单元格内容渲染成 DOM，而该函数只认识 `**/*/~~/`` 这四种行内语法，`![]()`/`[]()`/`<br>` 一律按纯文本原样显示（这才是截图里看到"一串裸露 `![](assets/...)` 文字"的直接原因）。给 `appendInlineMarkdown`（`widgetDom.ts`）新增可选的 `resolveImageSrc` 选项，支持把 `<br>` 转成真实换行、`![alt](src)` 转成真实 `<img>`（走与正文图片相同的 `resolveImageSrc` 路径解析）、`[text](href)` 转成可点击链接；`TableWidget` 构造函数新增可选 `resolveImageSrc` 参数并透传下去；`livePreview.ts` 新增 `resolveTableImageSrcFacet`（`blockDecorationsField` 是模块级 StateField、拿不到 `livePreviewExtension` 的闭包参数，用 Facet 传递）把正文已有的 `resolveImageSrc` 一并喂给表格 Widget
+  - 涉及文件：`src/modules/editor/core/htmlPaste.ts`、`src/modules/editor/decorations/widgetDom.ts`、`src/modules/editor/decorations/tableWidget.ts`、`src/modules/editor/decorations/livePreview.ts`
+  - 已知局限：标题级别统一按 H1 还原（目前只观察到一级标题被拍扁成单条目列表的样本，无法从文本内容可靠推断原始标题层级）；`<br>` 换行在表格单元格"直接编辑"态仍显示原始 `<br>` 文本（编辑态本就是展示 Markdown 源码，与其它行内语法编辑体验一致，非本次改动引入的新行为）
+  - `vue-tsc`/`eslint` 通过
+
+### Task089 外部修改检测（文件在编辑器外被改动后提示保存/加载）
+- 输入：用户需求："新增一个功能，打开文件后，若是其他地方修改了，能够检测，提示用户是保存已经打开的还是加载其它地方修改后的"
+- 方案取舍：没有引入 `notify` 一类文件系统监听 crate（会新增依赖，且个人单文件场景没必要常驻监听线程）。改用最小侵入的 mtime 比对方案：打开/保存/重新加载文件时记录磁盘 `mtime`，窗口重新获得焦点时（最常见触发场景——切到别的程序改完文件再切回来）用一次轻量 `stat` 调用比对，检测到不一致再弹窗，不做常驻轮询
+- 输出：
+  - `src-tauri/src/core/fs.rs`：新增 `get_mtime(file_path) -> Result<Option<i64>, AppError>`，返回 epoch 毫秒；文件不存在返回 `Ok(None)`（不当报错，避免打断使用）；补充单测（文件不存在 / 改写后 mtime 变化）
+  - `src-tauri/src/commands/fs.rs` + `lib.rs`：新增 `fs_get_mtime` command 并注册
+  - `src/ipc/fs.ts`：新增 `getFileMtime(filePath)` 封装
+  - `src/modules/tabs/types.ts`：`TabItem` 新增 `diskMtimeMs`（打开/保存/重新加载那一刻记录的磁盘 mtime）；新增 `ExternalChangeConflict` 类型（`tabId`/`fileName`/`hasLocalEdits`）
+  - `src/modules/tabs/store.ts`：
+    - `openFile`/`saveTab` 成功后记录 `diskMtimeMs`
+    - 新增 `checkExternalChanges()`：遍历所有已打开 tab，对比磁盘当前 mtime 与记录值，命中不一致则把冲突写入新状态 `externalConflict`（一次只展示一个，不自动覆盖任何一侧）
+    - 新增 `keepCurrentOverDisk(tabId)`（保存已经打开的，即用编辑器内容覆盖磁盘）、`loadDiskVersion(tabId)`（放弃编辑器内容，重新从磁盘读取并通过既有 `applyStoreContentToActiveEditor` 桥刷新编辑器）、`dismissExternalConflict()`（暂不处理，下次窗口聚焦重新检测）；两个处理动作后会链式再检查一次，一次聚焦命中多个 tab 冲突时可连续处理
+  - `src/modules/tabs/components/ExternalChangeDialog.vue`（新增，参照既有 `UnsavedChangesDialog.vue` 的结构/样式）：根据 `hasLocalEdits` 展示"保存已经打开的/加载外部修改后的/暂不处理"（无本地未保存修改时只展示"加载外部修改后的/暂不处理"，因为没有需要保护的本地内容）
+  - `src/modules/tabs/index.ts`：导出 `ExternalChangeDialog` 与 `ExternalChangeConflict`
+  - `src/App.vue`：全局挂载一个 `<ExternalChangeDialog>`（与 `<ToastHost/>` 同级，跟随 `tabsStore.externalConflict` 显示，不需要在 Editor/GitPanel/TabsBar 等多处各自接一份弹窗）；监听 `window` 的 `focus` 事件调用 `tabsStore.checkExternalChanges()`
+- 验收：用外部程序（如记事本）修改一个已在 MarkMFY 打开的文件后切回窗口——若编辑器内有未保存修改，弹窗提供"保存已经打开的/加载外部修改后的/暂不处理"三个选项；若编辑器内容与打开时一致，弹窗只提供"加载外部修改后的/暂不处理"；两种"处理"操作后编辑区内容与磁盘状态一致；未触发外部修改时不受任何影响；`vue-tsc`/`eslint`/`cargo test` 均通过
+- 已知局限：仅在窗口重新获得焦点时检测，不做常驻文件监听或定时轮询（不修改的时段内无法实时感知，符合个人轻量编辑器"启动快、内存低"的定位，多数场景下"切回窗口时检测"已经覆盖）；不处理文件被外部删除的场景（`get_mtime` 返回 `None` 时当前实现直接跳过，不弹窗，超出本次需求范围）
+- 依赖：Task013（打开文件/多标签基础）
+- 状态：已完成
+- 实现说明：未引入新依赖（notify/filetime 等），复用 Rust 标准库 `fs::metadata` 与既有 `applyStoreContentToActiveEditor` 内容回填桥；未改动 `saveTab` 之外任何已有保存/关闭流程的调用方式，`Editor.vue`/`GitPanel.vue`/`TabsBar.vue`/`registerCommands.ts` 里现有的 `saveTab` 调用均无需改动。

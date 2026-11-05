@@ -3,7 +3,6 @@
  */
 import type { EditorView } from "@codemirror/view";
 import { ChangeSet, EditorSelection } from "@codemirror/state";
-import { applyVisualStyle } from "./decorations/styleMarks";
 
 export type FormatAlign = "left" | "center" | "right" | "justify";
 
@@ -23,7 +22,8 @@ export type FormatCommand =
   | { type: "fontColor"; color: string }
   | { type: "backgroundColor"; color: string }
   | { type: "align"; align: FormatAlign }
-  | { type: "lineHeight"; value: string };
+  | { type: "lineHeight"; value: string }
+  | { type: "clearFormatting" };
 
 export interface FormatCommandResult {
   ok: boolean;
@@ -212,22 +212,176 @@ function toggleHtmlTag(view: EditorView, tag: string): FormatCommandResult {
   return toggleWrap(view, `<${tag}>`, `</${tag}>`);
 }
 
-/** 纯外观样式（颜色/字号/行高）：不写入文档，复制不含代码。 */
-function applyAppearanceStyle(
+type HtmlStyleKey = "color" | "background-color" | "font-size" | "line-height";
+
+/** 与 htmlPreview.ts 的 SPAN_RE 匹配：`<span style="a: v; b: v">`。 */
+const STYLE_SPAN_RE = /^<span\s+style="([^"]*)">([\s\S]*)<\/span>$/i;
+
+/** 解析 style 字符串为键值对（键统一小写）。 */
+function parseStyleAttrs(raw: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf(":");
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim().toLowerCase();
+    const val = part.slice(idx + 1).trim();
+    if (key && val) map.set(key, val);
+  }
+  return map;
+}
+
+/** 组装 style 字符串：保持插入顺序，值为空的键跳过。 */
+function buildStyleAttr(entries: Array<[string, string]>): string {
+  return entries.filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("; ");
+}
+
+/**
+ * 按行包裹 span：跨行选区若整段包一个 span，markdown 解析易把它当普通文本。
+ * 行内已有 span 时合并属性（改写其 style），避免产生嵌套 span——
+ * htmlPreview.ts 的非贪婪正则对嵌套 span 支持不好。
+ */
+function wrapLinesWithSpan(text: string, styleKey: HtmlStyleKey, styleValue: string): string {
+  const SPAN_RE = /<span\s+style="([^"]*)">([\s\S]*?)<\/span>/gi;
+  return text
+    .split("\n")
+    .map((line) => {
+      if (!line.trim()) return line;
+      const parts: string[] = [];
+      let last = 0;
+      let m: RegExpExecArray | null;
+      SPAN_RE.lastIndex = 0;
+      while ((m = SPAN_RE.exec(line))) {
+        const before = line.slice(last, m.index);
+        if (before) parts.push(`<span style="${styleKey}: ${styleValue}">${before}</span>`);
+        const entries = parseStyleAttrs(m[1] ?? "");
+        entries.set(styleKey, styleValue);
+        const next = buildStyleAttr([...entries]);
+        parts.push(`<span style="${next}">${m[2] ?? ""}</span>`);
+        last = m.index + m[0].length;
+      }
+      const tail = line.slice(last);
+      if (tail) parts.push(`<span style="${styleKey}: ${styleValue}">${tail}</span>`);
+      return parts.join("");
+    })
+    .join("\n");
+}
+
+/**
+ * 外观样式（颜色/字号/行高）写入文档：`<span style="...">选中文本</span>`。
+ * - 选区恰被白名单 span 紧贴包裹且已有该属性：值相同则移除（再点一次取消），不同则改写；
+ *   style 删空则整个 span 拆掉。
+ * - 选区在白名单 span 内部：合并进该 span 的 style，不产生嵌套 span。
+ * - 其余：按行包裹新 span。
+ */
+function applyHtmlStyleSpan(
   view: EditorView,
-  styleKey: "color" | "background-color" | "font-size" | "line-height",
+  styleKey: HtmlStyleKey,
   styleValue: string,
 ): FormatCommandResult {
-  const patch =
-    styleKey === "color"
-      ? { color: styleValue }
-      : styleKey === "background-color"
-        ? { backgroundColor: styleValue }
-        : styleKey === "font-size"
-          ? { fontSize: styleValue }
-          : { lineHeight: styleValue };
-  const ok = applyVisualStyle(view, patch);
-  return { ok };
+  const { state } = view;
+  const sel = state.selection.main;
+  if (sel.from === sel.to) {
+    focusAfter(view);
+    return { ok: false };
+  }
+  const from = sel.from;
+  const to = sel.to;
+  const selected = state.doc.sliceString(from, to);
+
+  // 「无背景」= 移除 background-color
+  const isRemoveOp = styleKey === "background-color" && styleValue === "transparent";
+
+  // 情形 1：选区恰好被一个 span 紧贴包裹
+  const selfMatch = selected.match(STYLE_SPAN_RE);
+  if (selfMatch) {
+    const rawStyle = selfMatch[1] ?? "";
+    const inner = selfMatch[2] ?? "";
+    const entries = parseStyleAttrs(rawStyle);
+    const prev = entries.get(styleKey);
+    if (prev === styleValue || isRemoveOp) {
+      entries.delete(styleKey);
+      const next = buildStyleAttr([...entries]);
+      if (next) {
+        view.dispatch({
+          changes: { from, to, insert: `<span style="${next}">${inner}</span>` },
+          selection: { anchor: from + `<span style="${next}">`.length },
+        });
+      } else {
+        view.dispatch({
+          changes: { from, to, insert: inner },
+          selection: { anchor: from },
+        });
+      }
+    } else {
+      entries.set(styleKey, styleValue);
+      const next = buildStyleAttr([...entries]);
+      view.dispatch({
+        changes: { from, to, insert: `<span style="${next}">${inner}</span>` },
+        selection: { anchor: from + `<span style="${next}">`.length },
+      });
+    }
+    focusAfter(view);
+    return { ok: true };
+  }
+
+  // 情形 2：选区在某个白名单 span 内部（未被紧贴包裹）→ 找到覆盖选区的 span 并合并属性
+  const lineStart = state.doc.lineAt(from).from;
+  const lineEnd = state.doc.lineAt(to).to;
+  const lineText = state.doc.sliceString(lineStart, lineEnd);
+  const SPAN_SCAN_RE = /<span\s+style="([^"]*)">([\s\S]*?)<\/span>/gi;
+  let m: RegExpExecArray | null;
+  let merged = false;
+  while ((m = SPAN_SCAN_RE.exec(lineText))) {
+    const sFrom = lineStart + m.index;
+    const sTo = sFrom + m[0].length;
+    if (sFrom < from && sTo > to) {
+      const rawStyle = m[1] ?? "";
+      const inner = m[2] ?? "";
+      const oldPrefixLen = m[0].indexOf(">") + 1;
+      const entries = parseStyleAttrs(rawStyle);
+      const prev = entries.get(styleKey);
+      if (prev === styleValue || isRemoveOp) entries.delete(styleKey);
+      else entries.set(styleKey, styleValue);
+      const next = buildStyleAttr([...entries]);
+      if (next) {
+        const prefix = `<span style="${next}">`;
+        // 旧内容区起点 = sFrom + oldPrefixLen，新内容区起点 = sFrom + prefix.length
+        view.dispatch({
+          changes: { from: sFrom, to: sTo, insert: `${prefix}${inner}</span>` },
+          selection: { anchor: sFrom + prefix.length + (from - sFrom - oldPrefixLen) },
+        });
+      } else {
+        view.dispatch({
+          changes: { from: sFrom, to: sTo, insert: inner },
+          selection: { anchor: from - oldPrefixLen },
+        });
+      }
+      merged = true;
+      break;
+    }
+  }
+  if (merged) {
+    focusAfter(view);
+    return { ok: true };
+  }
+
+  // 情形 3：普通包裹（按行拆分，已有 span 合并属性，避免嵌套与跨段 span）
+  const insert = wrapLinesWithSpan(selected, styleKey, styleValue);
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from, head: from + insert.length },
+  });
+  focusAfter(view);
+  return { ok: true };
+}
+
+/** 外观样式（颜色/字号/行高）：写入文档 `<span style>`，随文档保存持久化。 */
+function applyAppearanceStyle(
+  view: EditorView,
+  styleKey: HtmlStyleKey,
+  styleValue: string,
+): FormatCommandResult {
+  return applyHtmlStyleSpan(view, styleKey, styleValue);
 }
 
 const ALIGN_DIV_RE =
@@ -300,7 +454,51 @@ export function runFormatOnView(view: EditorView, command: FormatCommand): Forma
       return setLineAlign(view, command.align);
     case "lineHeight":
       return applyAppearanceStyle(view, "line-height", command.value);
+    case "clearFormatting":
+      return clearFormatting(view);
     default:
       return { ok: false };
   }
+}
+
+/**
+ * 清除格式：对选区（空选区取当前行）剥掉受控 HTML 包裹
+ * （span style / u / sup / sub / div align），恢复纯文本。可 Ctrl+Z。
+ */
+function clearFormatting(view: EditorView): FormatCommandResult {
+  const { state } = view;
+  const sel = state.selection.main;
+  // 覆盖范围：选区所在的所有行（选中部分行时也整行处理，保证标签成对剥离）
+  const startLine = state.doc.lineAt(sel.from);
+  const endLine = state.doc.lineAt(sel.to === sel.from ? sel.from : Math.max(sel.from, sel.to - 1));
+  const rangeFrom = startLine.from;
+  const rangeTo = endLine.to;
+  const text = state.doc.sliceString(rangeFrom, rangeTo);
+
+  // 递归剥离（嵌套时先内后外）
+  const CLEAR_RE = /<(span|u|sup|sub)(\s+style="[^"]*")?>((?:[^<]|<(?!\/?\1))*?)<\/\1>|<div\s+style="text-align:\s*(?:left|center|right|justify);?\s*">([\s\S]*?)<\/div>/gi;
+  let cleared = text;
+  let prev = "";
+  while (cleared !== prev) {
+    prev = cleared;
+    cleared = cleared.replace(CLEAR_RE, (_full, _tag: string, _style: string, inner: string | undefined, divInner: string | undefined) => {
+      return divInner !== undefined ? divInner : inner ?? "";
+    });
+  }
+
+  if (cleared === text) {
+    focusAfter(view);
+    return { ok: true };
+  }
+
+  const changeSet = ChangeSet.of(
+    [{ from: rangeFrom, to: rangeTo, insert: cleared }],
+    state.doc.length,
+  );
+  view.dispatch({
+    changes: changeSet,
+    selection: { anchor: rangeFrom },
+  });
+  focusAfter(view);
+  return { ok: true };
 }

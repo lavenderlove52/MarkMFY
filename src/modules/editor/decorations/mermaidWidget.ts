@@ -1,6 +1,13 @@
 import { EditorView, WidgetType } from "@codemirror/view";
-import { createToolbarButton, openLightbox } from "./widgetDom";
+import {
+  copySvgAsPngToClipboard,
+  copyTextToClipboard,
+  createToolbarButton,
+  createToolbarMenuButton,
+  openLightbox,
+} from "./widgetDom";
 import { requestBlockSourceEdit } from "./blockSourceEdit";
+import { showToast, toastError } from "../../../notify";
 import {
   normalizeMermaidPrefs,
   prefsEqual,
@@ -330,6 +337,56 @@ export class MermaidWidget extends WidgetType {
         syncView();
         scheduleSavePrefs();
       }),
+      createToolbarButton("复制源码", () => {
+        const fenced = this.fenceText || `\`\`\`mermaid\n${this.source}\n\`\`\`\n`;
+        void copyTextToClipboard(fenced).then((ok) => {
+          if (ok) showToast("已复制源码", "success");
+          else toastError(new Error("复制失败"), "复制源码失败");
+        });
+      }),
+      createToolbarMenuButton("复制内容", [
+        {
+          label: "复制为图片",
+          onClick: async () => {
+            const svg = canvas.querySelector("svg");
+            if (!svg) {
+              toastError(new Error("图未渲染完成"), "复制图片失败");
+              return;
+            }
+            // 大图栅格化耗时可能有 1~2 秒，先给个反馈避免看起来像“点了没反应”
+            showToast("正在生成图片…", "info", 6000);
+            try {
+              await copySvgAsPngToClipboard(svg);
+              showToast("已复制图片", "success");
+            } catch (err) {
+              // 直接展示真实报错文案，方便定位（而不是笼统的“复制失败”）
+              toastError(err, "复制图片失败");
+            }
+          },
+        },
+        {
+          label: "复制为 SVG",
+          onClick: async () => {
+            const svg = canvas.querySelector("svg");
+            if (!svg) {
+              toastError(new Error("图未渲染完成"), "复制 SVG 失败");
+              return;
+            }
+            const svgText = new XMLSerializer().serializeToString(svg);
+            const ok = await copyTextToClipboard(svgText);
+            if (ok) showToast("已复制 SVG", "success");
+            else toastError(new Error("复制失败"), "复制 SVG 失败");
+          },
+        },
+        {
+          label: "复制为源码文本",
+          onClick: async () => {
+            const ok = await copyTextToClipboard(this.source);
+            if (ok) showToast("已复制源码文本", "success");
+            else toastError(new Error("复制失败"), "复制源码文本失败");
+          },
+        },
+      ]),
       createToolbarButton("编辑", () => {
         enterBlockSourceEdit(view, this.from, this.to);
       }),

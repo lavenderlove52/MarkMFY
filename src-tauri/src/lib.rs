@@ -14,6 +14,7 @@ pub fn run() {
             commands::fs::fs_write_file,
             commands::fs::fs_create_file,
             commands::fs::fs_create_dir,
+            commands::fs::fs_get_mtime,
             commands::fs::fs_save_pasted_image,
             commands::git::git_status,
             commands::git::git_diff,

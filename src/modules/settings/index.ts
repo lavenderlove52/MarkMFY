@@ -5,7 +5,14 @@
 export { useSettingsStore } from "./store";
 export {
   DEFAULT_SETTINGS,
+  RECENT_WORKSPACE_LIMIT,
+  EDITOR_CONTENT_WIDTH_MIN,
+  EDITOR_CONTENT_WIDTH_MAX,
+  EDITOR_CONTENT_WIDTH_UNLIMITED,
+  normalizeEditorContentWidth,
+  normalizeRecentWorkspacePaths,
   normalizeSettings,
+  workspacePathKey,
   type AppSettings,
   type ThemeMode,
   type UiStyle,

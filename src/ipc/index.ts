@@ -10,3 +10,4 @@ export * from "./settings";
 export * from "./search";
 export { normalizeInvokeError } from "./errors";
 export { toAssetUrl } from "./asset";
+export { revealInDir } from "./system";

@@ -1,8 +1,8 @@
 import { defineStore } from "pinia";
-import { readFile, writeFile } from "../../ipc";
+import { getFileMtime, readFile, writeFile } from "../../ipc";
 import { showToast, toastError } from "../../notify";
-import { readActiveTabContent } from "./contentBridge";
-import type { TabItem } from "./types";
+import { applyStoreContentToActiveEditor, readActiveTabContent } from "./contentBridge";
+import type { ExternalChangeConflict, TabItem } from "./types";
 
 function fileNameFromPath(path: string): string {
   const parts = path.split(/[\\/]/);
@@ -13,6 +13,8 @@ export const useTabsStore = defineStore("tabs", {
   state: () => ({
     tabs: [] as TabItem[],
     activeTabId: null as string | null,
+    /** 当前等待用户处理的外部修改冲突（同一时间只展示一个，见 checkExternalChanges）。 */
+    externalConflict: null as ExternalChangeConflict | null,
   }),
   getters: {
     activeTab(state): TabItem | undefined {
@@ -32,6 +34,8 @@ export const useTabsStore = defineStore("tabs", {
       }
       try {
         const content = await readFile(filePath);
+        // mtime 查询失败不影响正常打开，只是放弃这份文件的外部修改检测（diskMtimeMs 留 null）。
+        const diskMtimeMs = await getFileMtime(filePath).catch(() => null);
         const tab: TabItem = {
           id: filePath,
           filePath,
@@ -39,6 +43,7 @@ export const useTabsStore = defineStore("tabs", {
           content,
           originalContent: content,
           isDirty: false,
+          diskMtimeMs,
         };
         this.tabs.push(tab);
         this.activeTabId = tab.id;
@@ -92,10 +97,69 @@ export const useTabsStore = defineStore("tabs", {
         await writeFile(tab.filePath, tab.content);
         tab.originalContent = tab.content;
         tab.isDirty = false;
+        tab.diskMtimeMs = await getFileMtime(tab.filePath).catch(() => tab.diskMtimeMs);
         showToast("已保存", "success", 2000);
       } catch (err) {
         toastError(err, "保存失败");
       }
+    },
+
+    /**
+     * 检查所有已打开 tab 对应的文件是否被其它程序修改过（磁盘 mtime 与最近一次
+     * 打开/保存时记录的不一致）。命中时把冲突信息写入 `externalConflict`，由
+     * `ExternalChangeDialog` 展示给用户选择"保存已经打开的"还是"加载外部修改后的"；
+     * 不会自动覆盖任何一侧内容。已有冲突等待处理时不重复检测。
+     * 调用时机：窗口重新获得焦点（App.vue），覆盖"切到别的程序改完文件再切回来"这个最常见场景。
+     */
+    async checkExternalChanges(): Promise<void> {
+      if (this.externalConflict) return;
+      for (const tab of this.tabs) {
+        if (tab.diskMtimeMs === null) continue;
+        let diskMtimeMs: number | null;
+        try {
+          diskMtimeMs = await getFileMtime(tab.filePath);
+        } catch {
+          continue; // 检测失败不打断正常使用，下次窗口聚焦再试
+        }
+        if (diskMtimeMs === null || diskMtimeMs === tab.diskMtimeMs) continue;
+        this.externalConflict = { tabId: tab.id, fileName: tab.fileName, hasLocalEdits: tab.isDirty };
+        return; // 一次只弹一个，处理完后由调用方决定是否继续检查下一个
+      }
+    },
+
+    /** 冲突弹窗「保存已经打开的」：用编辑器当前内容覆盖磁盘上的外部修改。 */
+    async keepCurrentOverDisk(tabId: string): Promise<void> {
+      if (tabId === this.activeTabId) {
+        this.materializeActiveContent();
+      }
+      this.externalConflict = null;
+      await this.saveTab(tabId);
+      await this.checkExternalChanges(); // 一次窗口聚焦可能有多个 tab 冲突，处理完一个接着看下一个
+    },
+
+    /** 冲突弹窗「加载外部修改后的」：放弃编辑器当前内容，重新从磁盘读取。 */
+    async loadDiskVersion(tabId: string): Promise<void> {
+      this.externalConflict = null;
+      const tab = this.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      try {
+        const content = await readFile(tab.filePath);
+        tab.content = content;
+        tab.originalContent = content;
+        tab.isDirty = false;
+        tab.diskMtimeMs = await getFileMtime(tab.filePath).catch(() => tab.diskMtimeMs);
+        if (tabId === this.activeTabId) {
+          applyStoreContentToActiveEditor();
+        }
+      } catch (err) {
+        toastError(err, "重新加载失败");
+      }
+      await this.checkExternalChanges(); // 一次窗口聚焦可能有多个 tab 冲突，处理完一个接着看下一个
+    },
+
+    /** 冲突弹窗「暂不处理」：先关闭弹窗，下次窗口聚焦时会重新检测。 */
+    dismissExternalConflict(): void {
+      this.externalConflict = null;
     },
 
     /** 放弃未保存修改，恢复为打开时 / 上次保存内容。 */

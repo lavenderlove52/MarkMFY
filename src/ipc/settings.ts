@@ -12,8 +12,10 @@ export interface AppSettings {
   uiStyle?: UiStyle;
   editorFontFamily: string;
   editorFontSize: number;
+  editorContentWidth?: number;
   keybindings?: Record<string, string>;
   lastWorkspacePath?: string;
+  recentWorkspacePaths?: string[];
   sidebarWidth?: number;
   gitPanelWidth?: number;
   sidebarOpen?: boolean;

@@ -53,16 +53,20 @@ pre code {
   font-size: 13px;
   line-height: 1.55;
 }
+/* 宽表靠单元格换行适配纸宽；勿用 display:block + overflow-x（打印会裁切右侧） */
 table {
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
-  display: block;
-  overflow-x: auto;
+  table-layout: auto;
 }
 th, td {
   border: 1px solid #d0d7de;
   padding: 6px 10px;
   text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 th { background: #f6f8fa; }
 hr {
@@ -76,6 +80,17 @@ hr {
 @media print {
   body { max-width: none; padding: 0; }
   a { color: inherit; text-decoration: none; }
-  pre { break-inside: avoid; }
+  pre { break-inside: avoid; overflow: visible; white-space: pre-wrap; }
+  table {
+    display: table;
+    width: 100%;
+    overflow: visible;
+  }
+  th, td {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  thead { display: table-header-group; }
 }
 `.trim();

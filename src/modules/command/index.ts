@@ -10,7 +10,7 @@
  * - 类型：`CommandDefinition` / `CommandListItem`
  *
  * 应用内建命令 id（由 `registerCommands.ts` 注册，视为稳定）：
- * `command.palette` | `workspace.openFolder` | `workspace.newFile` | `workspace.newFolder` |
+ * `command.palette` | `workspace.openFolder` | `workspace.openFile` | `workspace.newFile` | `workspace.newFolder` |
  * `file.save` | `settings.open` | `theme.toggle` | `git.refresh` | `git.commit` |
  * `export.html` | `export.pdf` | `search.open` | `search.openWorkspace`
  *

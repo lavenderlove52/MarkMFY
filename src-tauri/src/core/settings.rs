@@ -16,11 +16,18 @@ pub struct AppSettings {
     pub ui_style: String,
     pub editor_font_family: String,
     pub editor_font_size: u32,
+    /// 阅读区域最大宽度（px）；表格/图片/流程图/代码块均以此为 100% 基准。
+    /// 0 表示不限宽度（撑满编辑器可用空间）。
+    #[serde(default = "default_editor_content_width")]
+    pub editor_content_width: u32,
     #[serde(default)]
     pub keybindings: HashMap<String, String>,
     /// 上次打开的工作区路径；空表示无
     #[serde(default)]
     pub last_workspace_path: String,
+    /// 最近打开的工作区目录（MRU，去重，最多 50）
+    #[serde(default)]
+    pub recent_workspace_paths: Vec<String>,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: u32,
     #[serde(default = "default_git_panel_width")]
@@ -56,6 +63,35 @@ fn default_last_background_color() -> String {
 fn default_ui_style() -> String {
     "fresh".into()
 }
+fn default_editor_content_width() -> u32 {
+    820
+}
+
+const RECENT_WORKSPACE_LIMIT: usize = 50;
+
+fn normalize_recent_workspace_paths(paths: Vec<String>, seed_last: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for p in paths {
+        let t = p.trim().to_string();
+        if t.is_empty() {
+            continue;
+        }
+        let key = t.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(t);
+        if out.len() >= RECENT_WORKSPACE_LIMIT {
+            break;
+        }
+    }
+    let seed = seed_last.trim();
+    if out.is_empty() && !seed.is_empty() {
+        out.push(seed.to_string());
+    }
+    out
+}
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -64,8 +100,10 @@ impl Default for AppSettings {
             ui_style: default_ui_style(),
             editor_font_family: "\"Segoe UI\", system-ui, -apple-system, sans-serif".into(),
             editor_font_size: 15,
+            editor_content_width: default_editor_content_width(),
             keybindings: HashMap::new(),
             last_workspace_path: String::new(),
+            recent_workspace_paths: Vec::new(),
             sidebar_width: default_sidebar_width(),
             git_panel_width: default_git_panel_width(),
             sidebar_open: true,
@@ -94,14 +132,22 @@ impl AppSettings {
             self.editor_font_family = Self::default().editor_font_family;
         }
         self.editor_font_size = self.editor_font_size.clamp(10, 28);
+        self.editor_content_width = if self.editor_content_width == 0 {
+            0
+        } else {
+            self.editor_content_width.clamp(640, 1800)
+        };
         self.keybindings
             .retain(|k, v| !k.trim().is_empty() && !v.trim().is_empty());
         self.last_workspace_path = self.last_workspace_path.trim().to_string();
+        self.recent_workspace_paths = normalize_recent_workspace_paths(
+            self.recent_workspace_paths,
+            &self.last_workspace_path,
+        );
         self.sidebar_width = self.sidebar_width.clamp(160, 480);
         self.git_panel_width = self.git_panel_width.clamp(220, 560);
         self.last_font_color = normalize_color(&self.last_font_color, "#000000");
-        self.last_background_color =
-            normalize_color(&self.last_background_color, "#fef3c7");
+        self.last_background_color = normalize_color(&self.last_background_color, "#fef3c7");
         self
     }
 }
@@ -168,7 +214,8 @@ mod tests {
         let mut s = AppSettings::default();
         s.theme = "dark".into();
         s.editor_font_size = 18;
-        s.keybindings.insert("file.save".into(), "Mod-Shift-s".into());
+        s.keybindings
+            .insert("file.save".into(), "Mod-Shift-s".into());
         save(&path, &s).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.theme, "dark");
@@ -210,8 +257,14 @@ mod tests {
             ui_style: "CLASSIC".into(),
             editor_font_family: "".into(),
             editor_font_size: 99,
+            editor_content_width: 5000,
             keybindings: HashMap::new(),
             last_workspace_path: "  D:\\notes  ".into(),
+            recent_workspace_paths: vec![
+                " D:\\notes ".into(),
+                "D:\\Notes".into(),
+                "D:\\work".into(),
+            ],
             sidebar_width: 999,
             git_panel_width: 10,
             sidebar_open: true,
@@ -223,12 +276,51 @@ mod tests {
         assert_eq!(s.theme, "dark");
         assert_eq!(s.ui_style, "classic");
         assert_eq!(s.editor_font_size, 28);
+        assert_eq!(s.editor_content_width, 1800);
         assert!(!s.editor_font_family.is_empty());
         assert_eq!(s.last_workspace_path, "D:\\notes");
+        assert_eq!(
+            s.recent_workspace_paths,
+            vec!["D:\\notes".to_string(), "D:\\work".to_string()]
+        );
         assert_eq!(s.sidebar_width, 480);
         assert_eq!(s.git_panel_width, 220);
         assert!(!s.git_panel_open);
         assert_eq!(s.last_font_color, "#000000");
         assert_eq!(s.last_background_color, "#00ff00");
+    }
+
+    #[test]
+    fn editor_content_width_zero_means_unlimited() {
+        let s = AppSettings {
+            editor_content_width: 0,
+            ..AppSettings::default()
+        }
+        .normalize();
+        assert_eq!(s.editor_content_width, 0);
+    }
+
+    #[test]
+    fn load_without_editor_content_width_field_defaults_to_820() {
+        let path = env::temp_dir().join("markmfy-settings-legacy-content-width-test.json");
+        fs::write(
+            &path,
+            r#"{"theme":"light","editorFontFamily":"Arial","editorFontSize":14}"#,
+        )
+        .unwrap();
+        let s = load(&path).unwrap();
+        assert_eq!(s.editor_content_width, 820);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn recent_paths_seed_from_last_when_empty() {
+        let s = AppSettings {
+            last_workspace_path: "D:\\only".into(),
+            recent_workspace_paths: vec![],
+            ..AppSettings::default()
+        }
+        .normalize();
+        assert_eq!(s.recent_workspace_paths, vec!["D:\\only".to_string()]);
     }
 }

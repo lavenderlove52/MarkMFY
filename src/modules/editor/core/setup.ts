@@ -9,8 +9,8 @@ import {
   resolveLanguageByFilename,
 } from "../language/fileMode";
 import { livePreviewExtension, type ResolveImageSrc } from "../decorations/livePreview";
-import { visualStyleExtension } from "../decorations/styleMarks";
 import { preloadMermaid } from "../decorations/mermaidRenderer";
+import { isRichHtmlFragment } from "./htmlPaste";
 
 export interface EditorCallbacks {
   /** 文档有改动时调用（不再传全文，避免每键 O(n) 拷贝）。 */
@@ -18,6 +18,11 @@ export interface EditorCallbacks {
   onSave: () => void;
   resolveImageSrc: ResolveImageSrc;
   onPasteImage: (file: File) => void;
+  /**
+   * 粘贴到富文本 HTML（飞书文档/Word/网页复制等）。`plainFallback` 是浏览器同时
+   * 提供的 `text/plain`，转换失败或没有可用内容时用它兜底，不让粘贴变成空操作。
+   */
+  onPasteHtml: (html: string, plainFallback: string) => void;
 }
 
 export interface EditorExtensionBundle {
@@ -73,6 +78,12 @@ function baseEditorExtensions(callbacks: EditorCallbacks): Extension[] {
 function imageInsertHandlers(callbacks: EditorCallbacks): Extension {
   return EditorView.domEventHandlers({
     paste(event) {
+      const html = event.clipboardData?.getData("text/html") ?? "";
+      if (html && isRichHtmlFragment(html)) {
+        const plainFallback = event.clipboardData?.getData("text/plain") ?? "";
+        callbacks.onPasteHtml(html, plainFallback);
+        return true;
+      }
       const file = pickImageFile(event.clipboardData?.items);
       if (!file) return false;
       callbacks.onPasteImage(file);
@@ -117,7 +128,6 @@ export function createEditorExtensions(
         ...baseEditorExtensions(callbacks),
         languageCompartment.of(markdownLanguageSupport()),
         livePreviewExtension(callbacks.resolveImageSrc),
-        visualStyleExtension(),
         imageInsertHandlers(callbacks),
       ],
     };

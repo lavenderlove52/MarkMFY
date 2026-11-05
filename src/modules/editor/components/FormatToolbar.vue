@@ -298,7 +298,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="mm-format-toolbar__color-main"
-          title="应用上次字体颜色（仅外观，不写入文件；先选中文字）"
+          title="应用上次字体颜色（写入文档，先选中文字）"
           @click="applyLastColor('font')"
         >
           <span class="mm-format-toolbar__color-letter">A</span>
@@ -319,7 +319,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="mm-format-toolbar__color-main"
-          title="应用上次背景颜色（仅外观，不写入文件；先选中文字）"
+          title="应用上次背景颜色（写入文档，先选中文字）"
           @click="applyLastColor('bg')"
         >
           <span class="mm-format-toolbar__color-letter mm-format-toolbar__color-letter--bg">▮</span>
@@ -342,6 +342,15 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="mm-format-toolbar__sep" aria-hidden="true"></div>
+
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="清除格式（去掉选区的样式/下划线等包裹，恢复纯文本）"
+        @click="run({ type: 'clearFormatting' })"
+      >
+        ×格式
+      </button>
 
       <button type="button" class="mm-format-toolbar__btn" title="左对齐" @click="setAlign('left')">左</button>
       <button type="button" class="mm-format-toolbar__btn" title="居中" @click="setAlign('center')">中</button>

@@ -63,10 +63,22 @@ export function registerAppCommands(options: RegisterCommandsOptions): void {
     id: "workspace.openFolder",
     title: "打开文件夹",
     subtitle: "选择工作区目录",
-    keywords: ["open", "folder", "workspace"],
-    defaultShortcut: "Mod-o",
+    keywords: ["open", "folder", "workspace", "目录"],
+    defaultShortcut: "Mod-Shift-o",
     run: async () => {
       await workspaceStore.openFolder();
+    },
+  });
+
+  registerCommand({
+    id: "workspace.openFile",
+    title: "打开文件",
+    subtitle: "选择文件并以其所在目录为工作区",
+    keywords: ["open", "file", "打开", "文件"],
+    defaultShortcut: "Mod-o",
+    run: async () => {
+      const result = await workspaceStore.openFileAsWorkspace();
+      if (result) await tabsStore.openFile(result.file);
     },
   });
 
