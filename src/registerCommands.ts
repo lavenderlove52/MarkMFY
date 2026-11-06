@@ -2,11 +2,7 @@
  * 应用层命令注册：组装各业务 store/UI 动作为 Command。
  * 放在 src/ 根下而非 command 模块内，避免 Command 反向依赖业务实现。
  */
-import {
-  executeCommand,
-  registerCommand,
-  setShortcutOverrides,
-} from "./modules/command";
+import { executeCommand, registerCommand, setShortcutOverrides } from "./modules/command";
 import { useWorkspaceStore } from "./modules/filesystem";
 import { useGitStore } from "./modules/git";
 import { useSettingsStore } from "./modules/settings";
@@ -18,6 +14,8 @@ export interface RegisterCommandsOptions {
   closeCommandPalette: () => void;
   isCommandPaletteOpen: () => boolean;
   openSearch: (mode: "file" | "workspace") => void;
+  createMarkdown: () => Promise<void>;
+  createFolder: () => Promise<void>;
 }
 
 let registered = false;
@@ -85,27 +83,20 @@ export function registerAppCommands(options: RegisterCommandsOptions): void {
   registerCommand({
     id: "workspace.newFile",
     title: "新建 Markdown 文件",
-    subtitle: "在当前选中目录或工作区根目录",
+    subtitle: "在当前选中目录或工作区根目录；未打开工作区时先选择目录",
     keywords: ["new", "file", "markdown", "新建", "文件"],
-    when: () => workspaceStore.isOpen,
     run: async () => {
-      const name = window.prompt("新建 Markdown 文件名（可省略 .md）", "未命名");
-      if (name === null) return;
-      const path = await workspaceStore.createMarkdownFile(name.trim() || null);
-      if (path) await tabsStore.openFile(path);
+      await options.createMarkdown();
     },
   });
 
   registerCommand({
     id: "workspace.newFolder",
     title: "新建文件夹",
-    subtitle: "在当前选中目录或工作区根目录",
+    subtitle: "在当前选中目录或工作区根目录；未打开工作区时先选择目录",
     keywords: ["new", "folder", "mkdir", "新建", "文件夹"],
-    when: () => workspaceStore.isOpen,
     run: async () => {
-      const name = window.prompt("新建文件夹名称", "新建文件夹");
-      if (name === null) return;
-      await workspaceStore.createFolder(name.trim() || null);
+      await options.createFolder();
     },
   });
 

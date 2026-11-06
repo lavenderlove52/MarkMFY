@@ -4,12 +4,8 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { syntaxHighlighting } from "@codemirror/language";
 import { markdownLanguageSupport } from "../language/markdown";
 import { markmfyHighlightStyle } from "../language/highlight";
-import {
-  isMarkdownPath,
-  resolveLanguageByFilename,
-} from "../language/fileMode";
+import { isMarkdownPath, resolveLanguageByFilename } from "../language/fileMode";
 import { livePreviewExtension, type ResolveImageSrc } from "../decorations/livePreview";
-import { preloadMermaid } from "../decorations/mermaidRenderer";
 import { isRichHtmlFragment } from "./htmlPaste";
 
 export interface EditorCallbacks {
@@ -121,7 +117,6 @@ export function createEditorExtensions(
   const livePreview = markdownPath && !options.largeDocument;
 
   if (livePreview) {
-    preloadMermaid();
     return {
       languageCompartment,
       extensions: [

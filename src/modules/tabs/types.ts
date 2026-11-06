@@ -3,6 +3,8 @@ export interface TabItem {
   id: string;
   filePath: string;
   fileName: string;
+  /** 图片文件只做预览，不参与文本读取、编辑和保存。 */
+  kind: "text" | "image";
   content: string;
   originalContent: string;
   isDirty: boolean;

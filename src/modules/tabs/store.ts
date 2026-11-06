@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { getFileMtime, readFile, writeFile } from "../../ipc";
 import { showToast, toastError } from "../../notify";
+import { isImageFilePath } from "../filesystem";
 import { applyStoreContentToActiveEditor, readActiveTabContent } from "./contentBridge";
 import type { ExternalChangeConflict, TabItem } from "./types";
 
@@ -33,13 +34,15 @@ export const useTabsStore = defineStore("tabs", {
         return;
       }
       try {
-        const content = await readFile(filePath);
+        const kind = isImageFilePath(filePath) ? "image" : "text";
+        const content = kind === "image" ? "" : await readFile(filePath);
         // mtime 查询失败不影响正常打开，只是放弃这份文件的外部修改检测（diskMtimeMs 留 null）。
         const diskMtimeMs = await getFileMtime(filePath).catch(() => null);
         const tab: TabItem = {
           id: filePath,
           filePath,
           fileName: fileNameFromPath(filePath),
+          kind,
           content,
           originalContent: content,
           isDirty: false,
@@ -93,6 +96,7 @@ export const useTabsStore = defineStore("tabs", {
       }
       const tab = this.tabs.find((t) => t.id === tabId);
       if (!tab) return;
+      if (tab.kind === "image") return;
       try {
         await writeFile(tab.filePath, tab.content);
         tab.originalContent = tab.content;
@@ -114,6 +118,7 @@ export const useTabsStore = defineStore("tabs", {
     async checkExternalChanges(): Promise<void> {
       if (this.externalConflict) return;
       for (const tab of this.tabs) {
+        if (tab.kind === "image") continue;
         if (tab.diskMtimeMs === null) continue;
         let diskMtimeMs: number | null;
         try {
@@ -122,7 +127,11 @@ export const useTabsStore = defineStore("tabs", {
           continue; // 检测失败不打断正常使用，下次窗口聚焦再试
         }
         if (diskMtimeMs === null || diskMtimeMs === tab.diskMtimeMs) continue;
-        this.externalConflict = { tabId: tab.id, fileName: tab.fileName, hasLocalEdits: tab.isDirty };
+        this.externalConflict = {
+          tabId: tab.id,
+          fileName: tab.fileName,
+          hasLocalEdits: tab.isDirty,
+        };
         return; // 一次只弹一个，处理完后由调用方决定是否继续检查下一个
       }
     },
@@ -143,7 +152,7 @@ export const useTabsStore = defineStore("tabs", {
       const tab = this.tabs.find((t) => t.id === tabId);
       if (!tab) return;
       try {
-        const content = await readFile(tab.filePath);
+        const content = tab.kind === "image" ? "" : await readFile(tab.filePath);
         tab.content = content;
         tab.originalContent = content;
         tab.isDirty = false;

@@ -68,6 +68,23 @@ export interface CodeBlockLangOption {
   label: string;
 }
 
+export type CodeBlockTheme = "one-dark-pro" | "night-owl" | "darcula";
+
+export interface CodeBlockThemeOption {
+  value: CodeBlockTheme;
+  label: string;
+}
+
+/** 代码块没有显式主题时使用的默认配色。 */
+export const DEFAULT_CODE_BLOCK_THEME: CodeBlockTheme = "night-owl";
+
+/** 代码块可选的语法高亮主题。 */
+export const CODE_BLOCK_THEME_OPTIONS: CodeBlockThemeOption[] = [
+  { value: "one-dark-pro", label: "One Dark Pro" },
+  { value: "night-owl", label: "Night Owl" },
+  { value: "darcula", label: "Darcula" },
+];
+
 /** 下拉选项（value 为常用 fence 标识）。 */
 export const CODE_BLOCK_LANG_OPTIONS: CodeBlockLangOption[] = [
   { value: "", label: "Plain Text" },
@@ -111,6 +128,20 @@ export function normalizeFenceLang(raw: string): string {
   return raw.trim().toLowerCase().split(/\s+/)[0] ?? "";
 }
 
+/** 读取围栏 info 中的语言和代码块主题。 */
+export function parseFenceInfo(raw: string): {
+  lang: string;
+  theme: CodeBlockTheme;
+} {
+  const themeMatch = /(?:^|\s)theme=(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(raw);
+  const rawTheme = (themeMatch?.[1] ?? themeMatch?.[2] ?? themeMatch?.[3] ?? "").toLowerCase();
+  const theme = CODE_BLOCK_THEME_OPTIONS.find((option) => option.value === rawTheme)?.value;
+  return {
+    lang: normalizeFenceLang(raw),
+    theme: theme ?? DEFAULT_CODE_BLOCK_THEME,
+  };
+}
+
 /** 下拉回显：未知别名保留原文，便于显示后再写入。 */
 export function fenceLangForSelect(raw: string): string {
   const lang = normalizeFenceLang(raw);
@@ -142,8 +173,19 @@ export function normalizeCodeBody(raw: string): string {
 }
 
 /** 序列化为标准围栏；始终以换行结尾便于下一段 Markdown。 */
-export function serializeFencedCode(lang: string, body: string): string {
-  const info = normalizeFenceLang(lang);
+export function serializeFencedCode(
+  lang: string,
+  body: string,
+  theme: CodeBlockTheme = DEFAULT_CODE_BLOCK_THEME,
+): string {
+  const normalizedLang = normalizeFenceLang(lang);
+  const includeTheme = theme !== DEFAULT_CODE_BLOCK_THEME;
+  const info = [
+    includeTheme && !normalizedLang ? "text" : normalizedLang,
+    includeTheme ? `theme=${theme}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const normalized = normalizeCodeBody(body);
   const open = info ? `\`\`\`${info}` : "```";
   return `${open}\n${normalized}\n\`\`\`\n`;

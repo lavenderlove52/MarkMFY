@@ -24,14 +24,17 @@ import {
   EditorSelection,
   EditorState,
   Facet,
+  Prec,
   StateField,
   type Extension,
   type Range,
+  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -49,7 +52,13 @@ import {
   TableWidget,
   type TableCellData,
 } from "./widgets";
-import { normalizeCodeBody, normalizeFenceLang } from "./codeBlockModel";
+import {
+  codeBlockBodyFocusField,
+  markTemporaryLeadingParagraph,
+  requestCodeBlockBodyFocus,
+  temporaryLeadingParagraphField,
+} from "./codeBlockWidget";
+import { normalizeCodeBody, parseFenceInfo } from "./codeBlockModel";
 import { extractMathTex } from "../language/mathExtension";
 import { parseTableMetaLine, type TableLayout } from "./tableModel";
 import { parseMermaidMetaLine, type MermaidViewPrefs } from "./mermaidModel";
@@ -100,7 +109,11 @@ function isCursorOnLine(state: EditorState, pos: number): boolean {
  * CM6 要求 block widget 的 range 必须覆盖完整行（起止都在换行边界），
  * 否则 decoration 会被静默丢弃——这是表格/Mermaid 之前不显示的主要原因。
  */
-function blockWidgetRange(state: EditorState, from: number, to: number): { from: number; to: number } {
+function blockWidgetRange(
+  state: EditorState,
+  from: number,
+  to: number,
+): { from: number; to: number } {
   const start = state.doc.lineAt(from).from;
   const endLine = state.doc.lineAt(Math.max(from, to > from ? to - 1 : to));
   const end = endLine.to < state.doc.length ? endLine.to + 1 : endLine.to;
@@ -122,9 +135,15 @@ function hideRange(ranges: Range<Decoration>[], from: number, to: number): void 
   }
 }
 
-function markRange(ranges: Range<Decoration>[], from: number, to: number, className: string): void {
+function markRange(
+  ranges: Range<Decoration>[],
+  from: number,
+  to: number,
+  className: string,
+  attributes?: Record<string, string>,
+): void {
   if (to > from) {
-    ranges.push(Decoration.mark({ class: className }).range(from, to));
+    ranges.push(Decoration.mark({ class: className, attributes }).range(from, to));
   }
 }
 
@@ -134,37 +153,126 @@ function isPreviewWidgetTarget(target: Element): boolean {
   );
 }
 
-function caretPositionFromPoint(x: number, y: number): { node: Node; offset: number } | null {
-  const doc = document as Document & {
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-    caretRangeFromPoint?: (x: number, y: number) => { startContainer: Node; startOffset: number } | null;
-  };
-
-  const pos = doc.caretPositionFromPoint?.(x, y);
-  if (pos) return { node: pos.offsetNode, offset: pos.offset };
-
-  const range = doc.caretRangeFromPoint?.(x, y);
-  if (range) return { node: range.startContainer, offset: range.startOffset };
-
-  return null;
-}
-
 function posFromDomPoint(view: EditorView, lineEl: Element, event: MouseEvent): number | null {
-  const caret = caretPositionFromPoint(event.clientX, event.clientY);
-  if (caret && lineEl.contains(caret.node)) {
-    try {
-      return view.posAtDOM(caret.node, caret.offset);
-    } catch {
-      return null;
-    }
-  }
-
   try {
     const lineStart = view.posAtDOM(lineEl, 0);
-    return view.state.doc.lineAt(lineStart).to;
+    const line = view.state.doc.lineAt(lineStart);
+    if (line.from === line.to) return line.from;
+
+    // 先遍历行内真实可见文本节点，按鼠标位置找最近字符边界。
+    // 这条路径能跳过被零宽 CSS 折叠的 Markdown 标记，避免行内代码前的
+    // 反引号、列表标记等把锚点错误地拉回行首。
+    const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+    let bestPos: number | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!(node instanceof Text) || !node.data) continue;
+      if (node.parentElement?.closest(".mm-hide-mark")) continue;
+      const charRange = document.createRange();
+      for (let i = 0; i < node.data.length; i++) {
+        charRange.setStart(node, i);
+        charRange.setEnd(node, Math.min(i + 1, node.data.length));
+        const rect = charRange.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) continue;
+        const dx =
+          event.clientX < rect.left
+            ? rect.left - event.clientX
+            : event.clientX > rect.right
+              ? event.clientX - rect.right
+              : 0;
+        const dy =
+          event.clientY < rect.top
+            ? rect.top - event.clientY
+            : event.clientY > rect.bottom
+              ? event.clientY - rect.bottom
+              : 0;
+        const score = dx + dy * 4;
+        if (score >= bestScore) continue;
+        const offset = event.clientX < rect.left + rect.width / 2 ? i : i + 1;
+        try {
+          const pos = view.posAtDOM(node, offset);
+          if (pos >= line.from && pos <= line.to) {
+            bestPos = pos;
+            bestScore = score;
+          }
+        } catch {
+          // 继续尝试其它可见文本节点。
+        }
+      }
+      charRange.detach();
+    }
+    if (bestPos != null) return bestPos;
+
+    // 优先用 DOM Range 命中可见文本节点。行内代码等语法标记被零宽装饰覆盖时，
+    // 单纯按文档位置二分容易把可见文字起点算到隐藏反引号之前。
+    const doc = document as Document & {
+      caretRangeFromPoint?: (
+        x: number,
+        y: number,
+      ) => { startContainer: Node; startOffset: number } | null;
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+    };
+    const range = doc.caretRangeFromPoint?.(event.clientX, event.clientY);
+    if (range && lineEl.contains(range.startContainer)) {
+      const pos = view.posAtDOM(range.startContainer, range.startOffset);
+      if (pos >= line.from && pos <= line.to) return pos;
+    } else {
+      const caret = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
+      if (caret && lineEl.contains(caret.offsetNode)) {
+        const pos = view.posAtDOM(caret.offsetNode, caret.offset);
+        if (pos >= line.from && pos <= line.to) return pos;
+      }
+    }
+
+    // 最后兜底：按字符矩形横向二分。
+    let low = line.from;
+    let high = Math.max(line.from, line.to - 1);
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const coords = view.coordsAtPos(mid);
+      if (!coords) return null;
+      if (coords.right < event.clientX) low = mid + 1;
+      else high = mid;
+    }
+    const coords = view.coordsAtPos(low);
+    if (!coords) return low;
+    const center = (coords.left + coords.right) / 2;
+    return event.clientX < center ? low : Math.min(low + 1, line.to);
   } catch {
     return null;
   }
+}
+
+/**
+ * 拖拽时鼠标可能离开文字本身（例如越过首字继续向左或进入行间空白），
+ * elementFromPoint 就找不到 `.cm-line`。这里按纵坐标选择最近的普通文本行，
+ * 再把横坐标映射到该行的字符位置，避免选区在文字边缘中断。
+ */
+function findTextLineAtPoint(view: EditorView, x: number, y: number): Element | null {
+  const direct = document.elementFromPoint(x, y);
+  if (direct instanceof Element) {
+    const lineEl = direct.closest(".cm-line");
+    if (lineEl && view.contentDOM.contains(lineEl) && !isPreviewWidgetTarget(lineEl)) {
+      return lineEl;
+    }
+  }
+
+  let nearest: Element | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const lineEl of view.contentDOM.querySelectorAll(".cm-line")) {
+    if (isPreviewWidgetTarget(lineEl)) continue;
+    const rect = lineEl.getBoundingClientRect();
+    if (rect.height === 0) continue;
+    const distance = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0;
+    if (distance < nearestDistance) {
+      nearest = lineEl;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
 }
 
 /**
@@ -175,18 +283,11 @@ function posFromDomPoint(view: EditorView, lineEl: Element, event: MouseEvent): 
  * 必须在 mousedown 里 preventDefault 并立刻改选区，否则光标会先落到错误行；
  * 同时挂上临时 mousemove，保证仍可从正确落点拖拽选区。
  */
-function extendSelectionFromDom(
-  view: EditorView,
-  startAnchor: number,
-  event: MouseEvent,
-): void {
-  const el = document.elementFromPoint(event.clientX, event.clientY);
+function extendSelectionFromDom(view: EditorView, startAnchor: number, event: MouseEvent): void {
   let head: number | null = null;
-  if (el instanceof Element) {
-    const lineEl = el.closest(".cm-line");
-    if (lineEl && view.contentDOM.contains(lineEl) && !isPreviewWidgetTarget(el)) {
-      head = posFromDomPoint(view, lineEl, event);
-    }
+  const lineEl = findTextLineAtPoint(view, event.clientX, event.clientY);
+  if (lineEl) {
+    head = posFromDomPoint(view, lineEl, event);
   }
   if (head == null) {
     head = view.posAtCoords({ x: event.clientX, y: event.clientY });
@@ -266,9 +367,16 @@ function headingLineRange(state: EditorState, pos: number): { from: number; to: 
   return { from: line.from, to };
 }
 
-/** 标题正文起点（跳过 `#` 与紧随空格）；非标题行返回 null。 */
+/**
+ * 标题正文起点（跳过 `#` 与紧随空格）；非标题行或尚未完成标题语法时返回 null。
+ *
+ * Lezer 会把单独的 `#`～`######` 也解析成 ATX 标题。若此时进入预览态，HeaderMark
+ * 会被完全折叠，用户刚输入的 `#` 会看起来消失，甚至难以继续组合标题级别。
+ * 单独的 `#` 是输入中的标题，保持源码可见；输入空格后才视为标题语法完成并渲染。
+ */
 function headingContentStart(state: EditorState, lineFrom: number, lineTo: number): number | null {
   let contentStart: number | null = null;
+  let hasSpaceAfterMark = false;
   syntaxTree(state).iterate({
     from: lineFrom,
     to: lineTo,
@@ -276,14 +384,17 @@ function headingContentStart(state: EditorState, lineFrom: number, lineTo: numbe
       if (!HEADING_NAMES.includes(node.name)) return;
       const headerMark = node.node.getChild("HeaderMark");
       if (headerMark) {
-        const hasSpaceAfter = state.doc.sliceString(headerMark.to, headerMark.to + 1) === " ";
-        contentStart = headerMark.to + (hasSpaceAfter ? 1 : 0);
+        hasSpaceAfterMark = state.doc.sliceString(headerMark.to, headerMark.to + 1) === " ";
+        contentStart = headerMark.to + (hasSpaceAfterMark ? 1 : 0);
       } else {
         contentStart = node.from;
       }
       return false;
     },
   });
+  if (contentStart == null || (!hasSpaceAfterMark && contentStart === lineTo)) {
+    return null;
+  }
   return contentStart;
 }
 
@@ -307,13 +418,13 @@ function clampPosOutOfHeaderMark(state: EditorState, pos: number): number {
   return pos;
 }
 
-function handleHeading(
-  node: SyntaxNodeRef,
-  state: EditorState,
-  ranges: Range<Decoration>[],
-): void {
+function handleHeading(node: SyntaxNodeRef, state: EditorState, ranges: Range<Decoration>[]): void {
   const level = HEADING_NAMES.indexOf(node.name) + 1;
   const line = state.doc.lineAt(node.from);
+
+  // 输入中的标题（如单独输入 #～######）没有正文时保持源码可见，
+  // 否则 HeaderMark 被折叠后整行看起来像没有输入任何内容。
+  if (headingContentStart(state, line.from, line.to) == null) return;
 
   // 仅双击进入的源码态才露出 `#`；光标在标题行仍保持预览样式
   if (isHeadingLineInSourceEdit(state, line.from)) return;
@@ -373,27 +484,31 @@ function findHeadingLineAtPointer(
     rangeTo: -1,
     dist: Number.POSITIVE_INFINITY,
   };
-  syntaxTree(view.state).iterate({
-    enter(node) {
-      if (!HEADING_NAMES.includes(node.name)) return;
-      const line = view.state.doc.lineAt(node.from);
-      const coords = view.coordsAtPos(line.from);
-      const coordsEnd = view.coordsAtPos(line.to);
-      if (!coords || !coordsEnd) return;
-      const top = Math.min(coords.top, coordsEnd.top);
-      const bottom = Math.max(coords.bottom, coordsEnd.bottom);
-      if (event.clientY < top || event.clientY > bottom) return;
-      const dist = Math.abs((top + bottom) / 2 - event.clientY);
-      if (dist >= best.dist) return false;
-      const { from, to } = headingLineRange(view.state, line.from);
-      best.lineFrom = line.from;
-      best.lineTo = line.to;
-      best.rangeFrom = from;
-      best.rangeTo = to;
-      best.dist = dist;
-      return false;
-    },
-  });
+  for (const range of view.visibleRanges) {
+    syntaxTree(view.state).iterate({
+      from: range.from,
+      to: range.to,
+      enter(node) {
+        if (!HEADING_NAMES.includes(node.name)) return;
+        const line = view.state.doc.lineAt(node.from);
+        const coords = view.coordsAtPos(line.from);
+        const coordsEnd = view.coordsAtPos(line.to);
+        if (!coords || !coordsEnd) return;
+        const top = Math.min(coords.top, coordsEnd.top);
+        const bottom = Math.max(coords.bottom, coordsEnd.bottom);
+        if (event.clientY < top || event.clientY > bottom) return;
+        const dist = Math.abs((top + bottom) / 2 - event.clientY);
+        if (dist >= best.dist) return false;
+        const { from, to } = headingLineRange(view.state, line.from);
+        best.lineFrom = line.from;
+        best.lineTo = line.to;
+        best.rangeFrom = from;
+        best.rangeTo = to;
+        best.dist = dist;
+        return false;
+      },
+    });
+  }
   if (best.lineFrom < 0) return null;
   return {
     lineFrom: best.lineFrom,
@@ -437,6 +552,63 @@ function handleHeadingDblClick(view: EditorView, event: MouseEvent): boolean {
   return true;
 }
 
+/**
+ * 双击行内样式 → 把对应 Markdown 节点切到源码态。
+ * 标题内的行内样式由 `handleHeadingDblClick` 优先处理为整行源码态。
+ */
+function handleInlineMarkDblClick(view: EditorView, event: MouseEvent): boolean {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return false;
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  const markEl = target.closest(".mm-bold, .mm-italic, .mm-strikethrough, .mm-inline-code");
+  if (!markEl) return false;
+
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (pos == null) return false;
+  const expectedNode = markEl.classList.contains("mm-bold")
+    ? "StrongEmphasis"
+    : markEl.classList.contains("mm-italic")
+      ? "Emphasis"
+      : markEl.classList.contains("mm-strikethrough")
+        ? "Strikethrough"
+        : "InlineCode";
+  const sourceFrom = Number(markEl.getAttribute("data-mm-inline-from"));
+  const sourceTo = Number(markEl.getAttribute("data-mm-inline-to"));
+  let range: { from: number; to: number } | null =
+    Number.isFinite(sourceFrom) &&
+    Number.isFinite(sourceTo) &&
+    sourceFrom >= 0 &&
+    sourceTo > sourceFrom &&
+    sourceTo <= view.state.doc.length
+      ? { from: sourceFrom, to: sourceTo }
+      : null;
+  if (!range) {
+    syntaxTree(view.state).iterate({
+      from: Math.max(0, pos - 1),
+      to: Math.min(view.state.doc.length, pos + 1),
+      enter(node) {
+        if (node.name === expectedNode) {
+          range = { from: node.from, to: node.to };
+          return false;
+        }
+        return undefined;
+      },
+    });
+  }
+  if (!range) return false;
+
+  const anchor = Math.max(range.from + 1, Math.min(pos, range.to - 1));
+  event.preventDefault();
+  view.dispatch({
+    effects: requestBlockSourceEdit.of(range),
+    selection: { anchor },
+    scrollIntoView: true,
+  });
+  view.focus();
+  view.requestMeasure();
+  return true;
+}
+
 /** 标题行鼠标命中修正：字号放大后点击常落到邻行，键盘却能进来。 */
 function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey) return false;
@@ -449,11 +621,25 @@ function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
 
   const lineFrom = hit.lineFrom;
   const lineTo = hit.lineTo;
+  const lineEl = target.closest(".cm-line");
+  const exactAnchor = lineEl ? posFromDomPoint(view, lineEl, event) : null;
+  const contentStart = headingContentStart(view.state, lineFrom, lineTo) ?? lineFrom;
+  const rawMappedPos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const rawMappedSameLine =
+    rawMappedPos != null &&
+    view.state.doc.lineAt(rawMappedPos).number === view.state.doc.lineAt(lineFrom).number;
+
+  // 可见标题正文且坐标行正确时，完全交回 CodeMirror 原生选区。
+  // 之前这里只要旧选区不在标题行就接管，会把含行内代码的标题锚点夹回正文起点，
+  // 表现为从可见文字中间开始拖动却自动带上左侧全部内容。
+  if (rawMappedSameLine && exactAnchor != null && exactAnchor >= contentStart) {
+    return false;
+  }
+
   // midY 必须取标题行 DOM 元素的几何中心：coordsAtPos(lineTo) 在字号放大的标题上
   // 会给出偏下甚至落进下一行命中区的坐标，posAtCoords 反查回来就越过 lineTo，
   // 导致 anchor 被 fallback 钉死在 contentStart（表现为“标题正文点哪都只能点到行首”）。
   const midY = (() => {
-    const lineEl = target.closest(".cm-line");
     if (lineEl) {
       const rect = lineEl.getBoundingClientRect();
       return rect.top + rect.height / 2;
@@ -468,21 +654,23 @@ function handleHeadingMouseDown(view: EditorView, event: MouseEvent): boolean {
     clickPos = view.posAtCoords({ x: event.clientX, y: event.clientY });
   }
 
-  const contentStart = headingContentStart(view.state, lineFrom, lineTo) ?? lineFrom;
-
   const mappedOk = clickPos != null && clickPos >= lineFrom && clickPos <= lineTo;
   // 要求选区与标题行正文有真正重叠（而非仅“覆盖过第 0 字符”），否则任何位置
   // 的旧选区都会被误判成 alreadyOnLine，把本应修正的点击放行给 CM 默认行为。
   const alreadyOnLine =
-    mappedOk &&
-    view.state.selection.ranges.some((r) => r.from <= lineTo && r.to >= contentStart);
+    mappedOk && view.state.selection.ranges.some((r) => r.from <= lineTo && r.to >= contentStart);
 
   // 已点在标题行正文上且选区已正确时交给 CM 默认行为
   if (mappedOk && alreadyOnLine && clickPos! >= contentStart) {
     return false;
   }
 
-  const anchor = mappedOk ? Math.max(clickPos!, contentStart) : contentStart;
+  const anchor =
+    exactAnchor != null
+      ? Math.max(exactAnchor, contentStart)
+      : mappedOk
+        ? Math.max(clickPos!, contentStart)
+        : contentStart;
   event.preventDefault();
   view.dispatch({
     selection: { anchor },
@@ -500,8 +688,11 @@ function handleInlineMarks(
   ranges: Range<Decoration>[],
   markName: string,
   contentClass: string,
+  revealOnCursor = true,
 ): void {
-  const active = isCursorTouching(state, node.from, node.to);
+  const sourceRange = state.field(blockSourceEditField, false);
+  if (sourceRange && sourceRange.from <= node.from && node.to <= sourceRange.to) return;
+  const active = revealOnCursor && isCursorTouching(state, node.from, node.to);
   if (active) return;
 
   const marks = node.node.getChildren(markName);
@@ -511,7 +702,10 @@ function handleInlineMarks(
 
   hideRange(ranges, open.from, open.to);
   hideRange(ranges, close.from, close.to);
-  markRange(ranges, open.to, close.from, contentClass);
+  markRange(ranges, open.to, close.from, contentClass, {
+    "data-mm-inline-from": String(node.from),
+    "data-mm-inline-to": String(node.to),
+  });
 }
 
 function handleBlockquoteLine(
@@ -522,6 +716,7 @@ function handleBlockquoteLine(
   const active = isCursorOnLine(state, node.from);
   if (active) return;
   const hasSpaceAfter = state.doc.sliceString(node.to, node.to + 1) === " ";
+  if (!hasSpaceAfter) return;
   hideRange(ranges, node.from, node.to + (hasSpaceAfter ? 1 : 0));
 }
 
@@ -539,10 +734,15 @@ function handleHorizontalRule(
   ranges.push(Decoration.replace({ widget: new HrWidget(from, to), block: true }).range(from, to));
 }
 
-function handleListMark(node: SyntaxNodeRef, state: EditorState, ranges: Range<Decoration>[]): void {
+function handleListMark(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  ranges: Range<Decoration>[],
+): void {
   const text = state.doc.sliceString(node.from, node.to).trim();
   const active = isCursorTouching(state, node.from, node.to);
   if (active) return;
+  if (state.doc.sliceString(node.to, node.to + 1) !== " ") return;
   if (text === "-" || text === "*" || text === "+") {
     ranges.push(Decoration.replace({ widget: new BulletWidget() }).range(node.from, node.to));
   } else {
@@ -712,7 +912,11 @@ function extendMermaidRangeWithMeta(
   return { from, to: end, prefs };
 }
 
-function handleTable(node: SyntaxNodeRef, state: EditorState, ranges: Range<Decoration>[]): boolean {
+function handleTable(
+  node: SyntaxNodeRef,
+  state: EditorState,
+  ranges: Range<Decoration>[],
+): boolean {
   const base = blockWidgetRange(state, node.from, node.to);
   const { from, to, layout } = extendTableRangeWithMeta(state, base.from, base.to);
   // 仅显式「源码编辑」时拆预览；单元格直编期间仍保持 Widget。
@@ -791,16 +995,16 @@ function buildDecorationsUnsafe(view: EditorView, resolveImageSrc: ResolveImageS
             handleHeading(node, state, ranges);
             break;
           case "StrongEmphasis":
-            handleInlineMarks(node, state, ranges, "EmphasisMark", "mm-bold");
+            handleInlineMarks(node, state, ranges, "EmphasisMark", "mm-bold", false);
             break;
           case "Emphasis":
-            handleInlineMarks(node, state, ranges, "EmphasisMark", "mm-italic");
+            handleInlineMarks(node, state, ranges, "EmphasisMark", "mm-italic", false);
             break;
           case "Strikethrough":
-            handleInlineMarks(node, state, ranges, "StrikethroughMark", "mm-strikethrough");
+            handleInlineMarks(node, state, ranges, "StrikethroughMark", "mm-strikethrough", false);
             break;
           case "InlineCode":
-            handleInlineMarks(node, state, ranges, "CodeMark", "mm-inline-code");
+            handleInlineMarks(node, state, ranges, "CodeMark", "mm-inline-code", false);
             break;
           case "QuoteMark":
             handleBlockquoteLine(node, state, ranges);
@@ -808,6 +1012,13 @@ function buildDecorationsUnsafe(view: EditorView, resolveImageSrc: ResolveImageS
           case "Blockquote": {
             const fromLine = state.doc.lineAt(node.from).number;
             const toLine = state.doc.lineAt(Math.max(node.from, node.to - 1)).number;
+            const firstQuoteMark = node.node.getChild("QuoteMark");
+            if (
+              !firstQuoteMark ||
+              state.doc.sliceString(firstQuoteMark.to, firstQuoteMark.to + 1) !== " "
+            ) {
+              break;
+            }
             for (let ln = fromLine; ln <= toLine; ln++) {
               ranges.push(
                 Decoration.line({ class: "mm-blockquote" }).range(state.doc.line(ln).from),
@@ -838,7 +1049,10 @@ function buildDecorationsUnsafe(view: EditorView, resolveImageSrc: ResolveImageS
           // Table / Mermaid / 普通代码块 / BlockMath / HorizontalRule 的整块替换由 blockDecorationsField 负责。
           case "Table": {
             const { from, to } = blockWidgetRange(state, node.from, node.to);
-            if (!isTableInSourceEdit(state, from, to) && !isTableInSourceEdit(state, node.from, node.to)) {
+            if (
+              !isTableInSourceEdit(state, from, to) &&
+              !isTableInSourceEdit(state, node.from, node.to)
+            ) {
               return false;
             }
             break;
@@ -847,7 +1061,10 @@ function buildDecorationsUnsafe(view: EditorView, resolveImageSrc: ResolveImageS
             const base = blockWidgetRange(state, node.from, node.to);
             if (isMermaidFence(state, node)) {
               const { from, to } = extendMermaidRangeWithMeta(state, base.from, base.to);
-              if (!isBlockInSourceEdit(state, from, to) && !isBlockInSourceEdit(state, node.from, node.to)) {
+              if (
+                !isBlockInSourceEdit(state, from, to) &&
+                !isBlockInSourceEdit(state, node.from, node.to)
+              ) {
                 return false;
               }
             } else if (
@@ -891,10 +1108,17 @@ function buildDecorationsUnsafe(view: EditorView, resolveImageSrc: ResolveImageS
  * 对个人笔记级别的文档规模，这个开销可以忽略。
  */
 /** 光标落在表格/Mermaid 源码块时加浅底提示，避免被当成“渲染失败”。 */
-function markSourceEditing(state: EditorState, from: number, to: number, ranges: Range<Decoration>[]): void {
+function markSourceEditing(
+  state: EditorState,
+  from: number,
+  to: number,
+  ranges: Range<Decoration>[],
+): void {
   const startLine = state.doc.lineAt(from);
   const endLine = state.doc.lineAt(Math.max(from, to > from ? to - 1 : to));
-  ranges.push(Decoration.line({ class: "mm-source-editing mm-source-editing-first" }).range(startLine.from));
+  ranges.push(
+    Decoration.line({ class: "mm-source-editing mm-source-editing-first" }).range(startLine.from),
+  );
   for (let ln = startLine.number + 1; ln <= endLine.number; ln++) {
     ranges.push(Decoration.line({ class: "mm-source-editing" }).range(state.doc.line(ln).from));
   }
@@ -907,6 +1131,20 @@ function isMermaidFence(state: EditorState, node: SyntaxNodeRef): boolean {
   return lang === "mermaid" || lang.startsWith("mermaid ");
 }
 
+/**
+ * 裸围栏要等用户输入空格后才进入预览；已闭合围栏或带语言信息的围栏
+ * 保持原有行为，避免打开已有 Markdown 文件时代码块退化为源码。
+ */
+function isFenceReadyForPreview(state: EditorState, node: SyntaxNodeRef): boolean {
+  const marks = node.node.getChildren("CodeMark");
+  if (marks.length >= 2 || node.node.getChild("CodeInfo")) return true;
+  const openingMark = marks[0];
+  if (!openingMark) return false;
+  const line = state.doc.lineAt(node.from);
+  const next = state.doc.sliceString(openingMark.to, Math.min(line.to, openingMark.to + 1));
+  return next === " ";
+}
+
 /** 普通围栏 → 内嵌 CM Widget（编辑时不露 ```）；Mermaid 仍走 handleFencedCode。 */
 function handlePlainCodeBlock(
   node: SyntaxNodeRef,
@@ -914,6 +1152,7 @@ function handlePlainCodeBlock(
   ranges: Range<Decoration>[],
 ): boolean {
   if (isMermaidFence(state, node)) return false;
+  if (!isFenceReadyForPreview(state, node)) return false;
   const { from, to } = blockWidgetRange(state, node.from, node.to);
   if (isBlockInSourceEdit(state, from, to) || isBlockInSourceEdit(state, node.from, node.to)) {
     return false;
@@ -921,12 +1160,13 @@ function handlePlainCodeBlock(
 
   const info = node.node.getChild("CodeInfo");
   const text = node.node.getChild("CodeText");
-  const lang = info ? normalizeFenceLang(state.doc.sliceString(info.from, info.to)) : "";
+  const fenceInfo = info ? parseFenceInfo(state.doc.sliceString(info.from, info.to)) : null;
+  const lang = fenceInfo?.lang ?? "";
   const body = text ? normalizeCodeBody(state.doc.sliceString(text.from, text.to)) : "";
 
   ranges.push(
     Decoration.replace({
-      widget: new CodeBlockWidget(lang, body, from, to),
+      widget: new CodeBlockWidget(lang, body, from, to, fenceInfo?.theme),
       block: true,
     }).range(from, to),
   );
@@ -993,6 +1233,104 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
   }
 }
 
+/**
+ * 输入裸围栏后按空格时，一次性补成闭合代码块，并在后面留下真实空段落。
+ * 块 Widget 若覆盖到文档末尾，外层就没有可点击的后续行；在输入阶段完成
+ * 结构补全后，用户在代码框下方看到和点击到的就是普通 CodeMirror 行。
+ */
+const completeBareFenceOnSpace = EditorView.inputHandler.of((view, from, to, text) => {
+  if (text !== " " || from !== to) return false;
+  const line = view.state.doc.lineAt(from);
+  if (from !== line.to) return false;
+  const match = line.text.match(/^(\s*)(`{3,})$/);
+  if (!match) return false;
+
+  const indent = match[1];
+  const fence = match[2];
+  if (indent == null || fence == null) return false;
+  const insert = `${indent}${fence}\n${indent}\n${indent}${fence}\n\n`;
+  // 光标落在闭合围栏后的真实空段落，而不是代码块内部。
+  const afterBlockPos = line.from + insert.length - 1;
+  const bodyPos = line.from + indent.length + fence.length + 1;
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert },
+    selection: { anchor: afterBlockPos },
+    effects: requestCodeBlockBodyFocus.of(bodyPos),
+    scrollIntoView: true,
+  });
+  return true;
+});
+
+/**
+ * 光标位于代码块后的空白边界时，Backspace 删除整个围栏块。
+ * 默认删除只会吞掉块后的换行，把选区映射进块内，随后 Widget 会拆成源码；
+ * 这里把代码块及其与光标之间的空白作为一个整体删除。
+ */
+function deletePrecedingCodeBlockOnBackspace(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const pos = selection.from;
+  const line = view.state.doc.lineAt(pos);
+  if (pos !== line.from || line.text !== "") return false;
+
+  let targetFrom = -1;
+  let targetTo = -1;
+  let cursorInsideCodeBlock = false;
+  syntaxTree(view.state).iterate({
+    enter(node) {
+      if (node.name !== "FencedCode") return;
+      if (node.from <= pos && node.to >= pos) {
+        cursorInsideCodeBlock = true;
+      }
+      if (node.to <= line.from) {
+        targetFrom = node.from;
+        targetTo = node.to;
+      }
+    },
+  });
+  if (cursorInsideCodeBlock || targetFrom < 0) return false;
+  if (view.state.doc.sliceString(targetTo, pos).trim() !== "") return false;
+
+  const from = view.state.doc.lineAt(targetFrom).from;
+  view.dispatch({
+    changes: { from, to: pos },
+    selection: { anchor: from },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+const codeBlockBoundaryKeymap = Prec.highest(
+  keymap.of([
+    {
+      key: "Backspace",
+      run: (view) => deletePrecedingCodeBlockOnBackspace(view),
+    },
+  ]),
+);
+
+/** 临时首行文字被删空后，撤掉代码块前的空段落，让代码块回到第一行。 */
+const temporaryLeadingParagraphCleanup = EditorView.updateListener.of((update) => {
+  if (!update.docChanged || !update.state.field(temporaryLeadingParagraphField, false)) {
+    return;
+  }
+  const doc = update.state.doc;
+  if (doc.length < 2 || doc.sliceString(0, 1) !== "\n" || doc.line(1).text !== "") return;
+  queueMicrotask(() => {
+    const view = update.view;
+    if (!view.state.field(temporaryLeadingParagraphField, false)) return;
+    const current = view.state.doc;
+    if (current.length < 2 || current.sliceString(0, 1) !== "\n" || current.line(1).text !== "") {
+      return;
+    }
+    view.dispatch({
+      changes: { from: 0, to: 1 },
+      selection: { anchor: 0 },
+      effects: markTemporaryLeadingParagraph.of(false),
+    });
+  });
+});
+
 function sourceEditRangeEqual(
   a: { from: number; to: number } | null | undefined,
   b: { from: number; to: number } | null | undefined,
@@ -1023,6 +1361,33 @@ function selectionNearBlockMath(state: EditorState): boolean {
   return false;
 }
 
+const BLOCK_START_CHARACTER_RE = /[\n`~|$*_-]/;
+
+/**
+ * 普通正文输入不需要重建全文块级装饰。只有变更碰到已有块，或插入/删除了可能
+ * 形成表格、围栏代码、分割线、块公式的字符时，才需要重新扫描全文语法树。
+ */
+function docChangeAffectsBlockDecorations(tr: Transaction, decorations: DecorationSet): boolean {
+  let affected = false;
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (affected) return;
+    const removed = tr.startState.doc.sliceString(fromA, toA);
+    const inserted = tr.newDoc.sliceString(fromB, toB);
+    if (BLOCK_START_CHARACTER_RE.test(removed) || BLOCK_START_CHARACTER_RE.test(inserted)) {
+      affected = true;
+      return;
+    }
+    decorations.between(
+      Math.max(0, fromA - 1),
+      Math.min(tr.startState.doc.length, toA + 1),
+      (from, to) => {
+        if (from <= toA && to >= fromA) affected = true;
+      },
+    );
+  });
+  return affected;
+}
+
 const blockDecorationsField = StateField.define<DecorationSet>({
   create(state) {
     // 短超时尽量解析首屏附近；超时不硬堵，靠 treeChanged 后续补齐 Widget
@@ -1040,10 +1405,18 @@ const blockDecorationsField = StateField.define<DecorationSet>({
     const sourceModeChanged = !sourceEditRangeEqual(prevSource, nextSource);
     // BlockMath 靠光标进出切换预览/源码，需在相关选区变化时重建
     const mathSelectionChanged =
-      !!tr.selection &&
-      (selectionNearBlockMath(tr.state) || selectionNearBlockMath(tr.startState));
+      !!tr.selection && (selectionNearBlockMath(tr.state) || selectionNearBlockMath(tr.startState));
+    const docChangeAffectsBlocks = tr.docChanged && docChangeAffectsBlockDecorations(tr, deco);
+    // 语法树在后台继续解析时也会更新；这类无文档变更的进度仍需补齐块装饰。
+    const asyncTreeProgress = treeChanged && !tr.docChanged;
 
-    if (tr.docChanged || sourceModeToggled || treeChanged || sourceModeChanged || mathSelectionChanged) {
+    if (
+      docChangeAffectsBlocks ||
+      asyncTreeProgress ||
+      sourceModeToggled ||
+      sourceModeChanged ||
+      mathSelectionChanged
+    ) {
       return buildBlockDecorations(tr.state);
     }
     // 纯 selection 变化不再全量扫树（表格/Mermaid 多时箭头键会卡）
@@ -1134,7 +1507,8 @@ export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extensio
       return false;
     },
     dblclick(event, view) {
-      return handleHeadingDblClick(view, event);
+      if (handleHeadingDblClick(view, event)) return true;
+      return handleInlineMarkDblClick(view, event);
     },
   });
 
@@ -1183,6 +1557,11 @@ export function livePreviewExtension(resolveImageSrc: ResolveImageSrc): Extensio
     resolveTableImageSrcFacet.of(resolveImageSrc),
     tableSourceEditField,
     blockDecorationsField,
+    codeBlockBodyFocusField,
+    temporaryLeadingParagraphField,
+    completeBareFenceOnSpace,
+    codeBlockBoundaryKeymap,
+    temporaryLeadingParagraphCleanup,
     plugin,
     clickHandler,
     headingSelectionClamp,
@@ -1301,37 +1680,160 @@ const livePreviewTheme = EditorView.baseTheme({
   ".mm-code-block": {
     position: "relative",
     margin: "14px 0",
-    padding: "10px 12px 8px",
-    backgroundColor: "var(--mm-color-bg-muted)",
-    borderRadius: "var(--mm-radius-md)",
-    border: "1px solid var(--mm-color-border)",
+    padding: "0",
+    "--mm-code-bg": "#011627",
+    "--mm-code-toolbar-bg": "#071e33",
+    "--mm-code-border": "#1d3b53",
+    "--mm-code-text": "#d6deeb",
+    "--mm-code-muted": "#637777",
+    "--mm-code-accent": "#82aaff",
+    "--mm-code-hover": "rgba(130, 170, 255, 0.12)",
+    "--mm-code-syntax-keyword": "#c792ea",
+    "--mm-code-syntax-atom": "#f78c6c",
+    "--mm-code-syntax-literal": "#82aaff",
+    "--mm-code-syntax-string": "#ecc48d",
+    "--mm-code-syntax-type": "#ffcb8b",
+    "--mm-code-syntax-comment": "#637777",
+    "--mm-code-syntax-meta": "#7fdbca",
+    "--mm-code-syntax-invalid": "#ef5350",
+    backgroundColor: "var(--mm-code-bg)",
+    color: "var(--mm-code-text)",
+    borderRadius: "8px",
+    border: "1px solid var(--mm-code-border)",
     fontFamily: "var(--mm-font-mono, Consolas, 'Courier New', monospace)",
   },
-  ".mm-code-block__toolbar": {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: "6px",
-    marginBottom: "4px",
-    opacity: "0.75",
+  '.mm-code-block[data-code-theme="one-dark-pro"]': {
+    "--mm-code-bg": "#282c34",
+    "--mm-code-toolbar-bg": "#21252b",
+    "--mm-code-border": "#3e4451",
+    "--mm-code-text": "#abb2bf",
+    "--mm-code-muted": "#5c6370",
+    "--mm-code-accent": "#61afef",
+    "--mm-code-hover": "rgba(97, 175, 239, 0.12)",
+    "--mm-code-syntax-keyword": "#c678dd",
+    "--mm-code-syntax-atom": "#d19a66",
+    "--mm-code-syntax-literal": "#56b6c2",
+    "--mm-code-syntax-string": "#98c379",
+    "--mm-code-syntax-type": "#e5c07b",
+    "--mm-code-syntax-comment": "#5c6370",
+    "--mm-code-syntax-meta": "#abb2bf",
+    "--mm-code-syntax-invalid": "#e06c75",
   },
-  ".mm-code-block:hover .mm-code-block__toolbar, .mm-code-block:focus-within .mm-code-block__toolbar": {
+  '.mm-code-block[data-code-theme="darcula"]': {
+    "--mm-code-bg": "#2b2b2b",
+    "--mm-code-toolbar-bg": "#313335",
+    "--mm-code-border": "#3c3f41",
+    "--mm-code-text": "#a9b7c6",
+    "--mm-code-muted": "#808080",
+    "--mm-code-accent": "#4a88c7",
+    "--mm-code-hover": "rgba(74, 136, 199, 0.16)",
+    "--mm-code-syntax-keyword": "#cc7832",
+    "--mm-code-syntax-atom": "#9876aa",
+    "--mm-code-syntax-literal": "#6897bb",
+    "--mm-code-syntax-string": "#6a8759",
+    "--mm-code-syntax-type": "#a9b7c6",
+    "--mm-code-syntax-comment": "#808080",
+    "--mm-code-syntax-meta": "#bbb529",
+    "--mm-code-syntax-invalid": "#ff6b68",
+  },
+  ".mm-code-block:focus-within": {
+    borderColor: "var(--mm-code-accent)",
+  },
+  ".mm-code-block__above": {
+    position: "absolute",
+    left: "0",
+    right: "0",
+    top: "-30px",
+    height: "28px",
+    padding: "0",
+    border: "0",
+    outline: "none",
+    background: "transparent",
+    color: "var(--mm-color-text)",
+    font: "inherit",
+    opacity: "0",
+    cursor: "text",
+  },
+  ".mm-code-block__above:focus": {
     opacity: "1",
   },
-  ".mm-code-block__lang": {
-    fontSize: "12px",
+  ".mm-code-block > .mm-code-block__toolbar": {
+    position: "static",
+    display: "flex",
+    flexWrap: "nowrap",
+    alignItems: "center",
+    gap: "6px",
+    minHeight: "34px",
+    margin: "0",
     padding: "3px 7px",
-    borderRadius: "var(--mm-radius-sm)",
-    border: "1px solid var(--mm-color-border)",
-    background: "var(--mm-color-surface)",
-    color: "var(--mm-color-text)",
-    maxWidth: "140px",
+    borderBottom: "1px solid var(--mm-code-border)",
+    borderTopLeftRadius: "7px",
+    borderTopRightRadius: "7px",
+    background: "var(--mm-code-toolbar-bg)",
+    color: "var(--mm-code-text)",
+    opacity: "1",
+    pointerEvents: "auto",
+  },
+  ".mm-code-block__lang-menu": {
+    marginLeft: "auto",
+    flex: "0 0 auto",
+  },
+  ".mm-code-block__lang-menu .mm-widget-menu__trigger": {
+    maxWidth: "160px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "13px",
+    padding: "3px 5px",
+  },
+  ".mm-code-block__lang-menu .mm-widget-menu__list": {
+    minWidth: "180px",
+    maxHeight: "300px",
+    overflowY: "auto",
+  },
+  ".mm-code-block__theme-menu .mm-widget-menu__trigger": {
+    maxWidth: "136px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "13px",
+    padding: "3px 5px",
+  },
+  ".mm-code-block__theme-menu .mm-widget-menu__list": {
+    minWidth: "160px",
+  },
+  ".mm-code-block .mm-widget-btn": {
+    padding: "3px 5px",
+    border: "0",
+    background: "transparent",
+    boxShadow: "none",
+    fontSize: "12px",
+    color: "var(--mm-code-text)",
+  },
+  ".mm-code-block .mm-widget-btn:hover": {
+    background: "var(--mm-code-hover)",
+  },
+  ".mm-code-block .mm-widget-menu__list": {
+    background: "var(--mm-code-toolbar-bg)",
+    borderColor: "var(--mm-code-border)",
+  },
+  ".mm-code-block .mm-widget-menu__item::before": {
+    content: '" "',
+    display: "inline-block",
+    width: "16px",
+  },
+  ".mm-code-block .mm-widget-menu__item.is-active::before": {
+    content: '"✓"',
+    color: "var(--mm-code-accent)",
   },
   ".mm-code-block__editor": {
     minHeight: "1.5em",
   },
   ".mm-code-block__editor .cm-editor": {
     backgroundColor: "transparent",
+  },
+  ".mm-code-block__editor .cm-cursor": {
+    borderLeftColor: "var(--mm-code-accent)",
   },
   ".mm-blockquote": {
     borderLeft: "2px solid var(--mm-color-border-strong, var(--mm-color-accent))",
@@ -1648,7 +2150,7 @@ const livePreviewTheme = EditorView.baseTheme({
     /* 负边距会盖住下一行标题并抢走点击；改为行内留白 */
     padding: "6px 10px",
     margin: "0 0 6px 0",
-    fontFamily: "var(--mm-ui-font-family, \"Segoe UI\", system-ui, sans-serif)",
+    fontFamily: 'var(--mm-ui-font-family, "Segoe UI", system-ui, sans-serif)',
     /* 提示条不参与命中，避免挡到下方「主流 Agent…」等标题 */
     pointerEvents: "none",
     userSelect: "none",

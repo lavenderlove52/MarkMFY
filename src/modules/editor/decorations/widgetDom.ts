@@ -1,5 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 
+let closeActiveLightbox: (() => void) | null = null;
+
 export interface InlineMarkdownOptions {
   /**
    * 相对路径 → 可加载的 URL（同 Editor.vue 的 resolveImageSrc）。不传时
@@ -101,6 +103,7 @@ export function focusInsideBlock(view: EditorView, from: number, to: number): vo
 }
 
 export function openLightbox(content: HTMLElement, title: string): void {
+  closeActiveLightbox?.();
   const existing = document.querySelector(".mm-lightbox");
   existing?.remove();
 
@@ -116,25 +119,187 @@ export function openLightbox(content: HTMLElement, title: string): void {
   bar.className = "mm-lightbox__bar";
   const label = document.createElement("span");
   label.textContent = title;
+  const actions = document.createElement("div");
+  actions.className = "mm-lightbox__actions";
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
   closeBtn.className = "mm-lightbox__close";
   closeBtn.textContent = "关闭";
-  bar.append(label, closeBtn);
+  actions.appendChild(closeBtn);
+  bar.append(label, actions);
 
   const body = document.createElement("div");
   body.className = "mm-lightbox__body";
   body.appendChild(content);
+  const image = content instanceof HTMLImageElement ? content : null;
+  let onZoomIn: (() => void) | null = null;
+  let onZoomOut: (() => void) | null = null;
+  let onZoomReset: (() => void) | null = null;
+  let cleanupLightbox: () => void = () => {};
+  if (image) {
+    panel.classList.add("mm-lightbox__panel--image");
+    body.classList.add("mm-lightbox__body--image");
+    const controls = document.createElement("div");
+    controls.className = "mm-lightbox__zoom";
+    const zoomOut = document.createElement("button");
+    zoomOut.type = "button";
+    zoomOut.className = "mm-lightbox__zoom-btn";
+    zoomOut.textContent = "−";
+    zoomOut.title = "缩小";
+    zoomOut.setAttribute("aria-label", "缩小图片");
+    const zoomValue = document.createElement("button");
+    zoomValue.type = "button";
+    zoomValue.className = "mm-lightbox__zoom-value";
+    zoomValue.textContent = "适应";
+    zoomValue.title = "恢复适应窗口";
+    zoomValue.setAttribute("aria-label", "恢复适应窗口");
+    const zoomIn = document.createElement("button");
+    zoomIn.type = "button";
+    zoomIn.className = "mm-lightbox__zoom-btn";
+    zoomIn.textContent = "+";
+    zoomIn.title = "放大";
+    zoomIn.setAttribute("aria-label", "放大图片");
+    controls.append(zoomOut, zoomValue, zoomIn);
+    actions.prepend(controls);
+
+    let zoom = 1;
+    let fitScale = 1;
+    const clampRatio = (value: number): number => Math.max(0, Math.min(1, value));
+    const applyZoom = (next: number, pointer?: { clientX: number; clientY: number }): void => {
+      const w = image.naturalWidth;
+      const h = image.naturalHeight;
+      if (!w || !h) return;
+      const imageRect = image.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      if (imageRect.width <= 0 || imageRect.height <= 0) return;
+      const pointerOnImage =
+        pointer != null &&
+        pointer.clientX >= imageRect.left &&
+        pointer.clientX <= imageRect.right &&
+        pointer.clientY >= imageRect.top &&
+        pointer.clientY <= imageRect.bottom;
+      const anchorClientX = pointerOnImage ? pointer.clientX : imageRect.left + imageRect.width / 2;
+      const anchorClientY = pointerOnImage ? pointer.clientY : imageRect.top + imageRect.height / 2;
+      const ratioX = clampRatio((anchorClientX - imageRect.left) / imageRect.width);
+      const ratioY = clampRatio((anchorClientY - imageRect.top) / imageRect.height);
+      const viewportX = anchorClientX - bodyRect.left;
+      const viewportY = anchorClientY - bodyRect.top;
+      const availableW = Math.max(120, body.clientWidth - 32);
+      const availableH = Math.max(120, body.clientHeight - 32);
+      fitScale = Math.min(1, availableW / w, availableH / h);
+      zoom = Math.max(0.25, Math.min(4, next));
+      const scale = fitScale * zoom;
+      image.style.maxWidth = "none";
+      image.style.maxHeight = "none";
+      image.style.width = `${Math.max(1, Math.round(w * scale))}px`;
+      image.style.height = `${Math.max(1, Math.round(h * scale))}px`;
+      zoomValue.textContent = `${Math.round(scale * 100)}%`;
+      const nextRect = image.getBoundingClientRect();
+      const nextBodyRect = body.getBoundingClientRect();
+      body.scrollLeft += nextRect.left + ratioX * nextRect.width - (nextBodyRect.left + viewportX);
+      body.scrollTop += nextRect.top + ratioY * nextRect.height - (nextBodyRect.top + viewportY);
+    };
+    const resetZoom = (): void => applyZoom(1);
+    onZoomIn = () => applyZoom(zoom * 1.25);
+    onZoomOut = () => applyZoom(zoom / 1.25);
+    onZoomReset = resetZoom;
+    zoomIn.addEventListener("click", () => onZoomIn?.());
+    zoomOut.addEventListener("click", () => onZoomOut?.());
+    zoomValue.addEventListener("click", resetZoom);
+    body.addEventListener(
+      "wheel",
+      (event) => {
+        if (!event.ctrlKey) return;
+        event.preventDefault();
+        applyZoom(zoom * Math.exp(-event.deltaY * 0.0015), event);
+      },
+      { passive: false },
+    );
+    body.addEventListener("dblclick", (event) => {
+      if (event.target !== image) return;
+      applyZoom(zoom > 1.001 ? 1 : 1 / Math.max(fitScale, 0.01), event);
+    });
+
+    image.draggable = false;
+    let dragPointerId: number | null = null;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartScrollLeft = 0;
+    let dragStartScrollTop = 0;
+    let moved = false;
+    const endDrag = (event: PointerEvent): void => {
+      if (dragPointerId !== event.pointerId) return;
+      dragPointerId = null;
+      moved = false;
+      body.classList.remove("mm-lightbox__body--dragging");
+      if (image.hasPointerCapture(event.pointerId)) {
+        image.releasePointerCapture(event.pointerId);
+      }
+    };
+    image.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragPointerId = event.pointerId;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragStartScrollLeft = body.scrollLeft;
+      dragStartScrollTop = body.scrollTop;
+      moved = false;
+      image.setPointerCapture(event.pointerId);
+    });
+    image.addEventListener("pointermove", (event) => {
+      if (dragPointerId !== event.pointerId) return;
+      const dx = event.clientX - dragStartX;
+      const dy = event.clientY - dragStartY;
+      if (!moved && Math.hypot(dx, dy) > 3) {
+        moved = true;
+        body.classList.add("mm-lightbox__body--dragging");
+        event.preventDefault();
+      }
+      if (!moved) return;
+      body.scrollLeft = dragStartScrollLeft - dx;
+      body.scrollTop = dragStartScrollTop - dy;
+    });
+    image.addEventListener("pointerup", endDrag);
+    image.addEventListener("pointercancel", endDrag);
+
+    let resizeFrame: number | null = null;
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            if (resizeFrame != null) return;
+            resizeFrame = requestAnimationFrame(() => {
+              resizeFrame = null;
+              applyZoom(zoom);
+            });
+          });
+    resizeObserver?.observe(panel);
+    cleanupLightbox = () => {
+      resizeObserver?.disconnect();
+      if (resizeFrame != null) cancelAnimationFrame(resizeFrame);
+    };
+
+    const initializeZoom = (): void => {
+      requestAnimationFrame(resetZoom);
+    };
+    if (image.complete) initializeZoom();
+    else image.addEventListener("load", initializeZoom, { once: true });
+  }
 
   panel.append(bar, body);
   overlay.appendChild(panel);
 
   const close = (): void => {
+    cleanupLightbox();
     overlay.remove();
     window.removeEventListener("keydown", onKey);
+    if (closeActiveLightbox === close) closeActiveLightbox = null;
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === "Escape") close();
+    else if (e.key === "+" || e.key === "=") onZoomIn?.();
+    else if (e.key === "-") onZoomOut?.();
+    else if (e.key === "0") onZoomReset?.();
   };
   closeBtn.addEventListener("click", close);
   overlay.addEventListener("click", (e) => {
@@ -142,9 +307,13 @@ export function openLightbox(content: HTMLElement, title: string): void {
   });
   window.addEventListener("keydown", onKey);
   document.body.appendChild(overlay);
+  closeActiveLightbox = close;
 }
 
-export function createToolbarButton(label: string, onClick: (e: MouseEvent) => void): HTMLButtonElement {
+export function createToolbarButton(
+  label: string,
+  onClick: (e: MouseEvent) => void,
+): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "mm-widget-btn";
@@ -264,6 +433,15 @@ export async function copySvgAsPngToClipboard(svg: SVGSVGElement, scale = 2): Pr
 export interface ToolbarMenuItem {
   label: string;
   onClick: () => void | Promise<void>;
+  /** 打开菜单时用于标记当前选项。 */
+  isActive?: () => boolean;
+}
+
+const toolbarMenuDisposers = new WeakMap<HTMLElement, () => void>();
+
+/** 主动清理菜单可能注册在 document 上的临时监听器。 */
+export function disposeToolbarMenu(menu: HTMLElement): void {
+  toolbarMenuDisposers.get(menu)?.();
 }
 
 /**
@@ -278,6 +456,7 @@ export function createToolbarMenuButton(label: string, items: ToolbarMenuItem[])
   menu.className = "mm-widget-menu__list";
   menu.setAttribute("role", "menu");
   menu.hidden = true;
+  const buttons: HTMLButtonElement[] = [];
 
   const onOutside = (e: MouseEvent): void => {
     if (!(e.target instanceof Node) || !wrap.contains(e.target)) close();
@@ -291,6 +470,13 @@ export function createToolbarMenuButton(label: string, items: ToolbarMenuItem[])
     document.removeEventListener("keydown", onKeydown, true);
   }
   function open(): void {
+    for (const [index, item] of items.entries()) {
+      const button = buttons[index];
+      if (!button) continue;
+      const active = item.isActive?.() ?? false;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-checked", String(active));
+    }
     menu.hidden = false;
     document.addEventListener("mousedown", onOutside, true);
     document.addEventListener("keydown", onKeydown, true);
@@ -308,9 +494,17 @@ export function createToolbarMenuButton(label: string, items: ToolbarMenuItem[])
       void item.onClick();
     });
     btn.classList.add("mm-widget-menu__item");
+    if (item.isActive) {
+      btn.setAttribute("role", "menuitemradio");
+      btn.setAttribute("aria-checked", String(item.isActive()));
+    } else {
+      btn.setAttribute("role", "menuitem");
+    }
     menu.appendChild(btn);
+    buttons.push(btn);
   }
 
   wrap.append(trigger, menu);
+  toolbarMenuDisposers.set(wrap, close);
   return wrap;
 }

@@ -19,6 +19,7 @@ import { useWorkspaceStore } from "./store";
 export { useWorkspaceStore } from "./store";
 export type { FileTreeNode } from "./types";
 export { default as FileTree } from "./components/FileTree.vue";
+export { isImageFilePath } from "./fileTypes";
 
 /** 当前工作区根路径；未打开时返回 null。 */
 export function getWorkspaceRootPath(): string | null {
@@ -36,9 +37,7 @@ export function writeWorkspaceFile(filePath: string, content: string): Promise<v
 }
 
 /** 列出目录条目。 */
-export function listWorkspaceDir(dirPath: string): Promise<
-  Awaited<ReturnType<typeof listDir>>
-> {
+export function listWorkspaceDir(dirPath: string): Promise<Awaited<ReturnType<typeof listDir>>> {
   return listDir(dirPath);
 }
 

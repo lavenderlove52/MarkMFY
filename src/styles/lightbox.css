@@ -25,6 +25,17 @@
   box-shadow: var(--mm-shadow-overlay);
 }
 
+.mm-lightbox__panel--image {
+  width: min(88vw, 1400px);
+  height: min(88vh, 900px);
+  min-width: min(520px, 92vw);
+  min-height: min(360px, 82vh);
+  max-width: 96vw;
+  max-height: 92vh;
+  resize: both;
+  overflow: hidden;
+}
+
 .mm-lightbox__bar {
   display: flex;
   align-items: center;
@@ -35,6 +46,50 @@
   font-size: 13px;
   color: var(--mm-color-text);
   flex: none;
+}
+
+.mm-lightbox__actions,
+.mm-lightbox__zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mm-lightbox__zoom {
+  padding-right: 8px;
+  margin-right: 2px;
+  border-right: 1px solid var(--mm-color-border);
+}
+
+.mm-lightbox__zoom-btn,
+.mm-lightbox__zoom-value {
+  height: 26px;
+  border: 1px solid var(--mm-color-border);
+  border-radius: var(--mm-radius-sm);
+  background: var(--mm-color-surface);
+  color: var(--mm-color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mm-lightbox__zoom-btn {
+  width: 28px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.mm-lightbox__zoom-value {
+  min-width: 54px;
+  padding: 0 8px;
+  color: var(--mm-color-text-muted);
+  font-size: 12px;
+}
+
+.mm-lightbox__zoom-btn:hover,
+.mm-lightbox__zoom-value:hover,
+.mm-lightbox__close {
+  background: var(--mm-color-hover);
 }
 
 .mm-lightbox__close {
@@ -61,6 +116,17 @@
   background: var(--mm-color-bg-muted);
 }
 
+.mm-lightbox__body--image {
+  display: block;
+  text-align: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.mm-lightbox__body--dragging {
+  cursor: grabbing;
+}
+
 .mm-lightbox__img {
   display: block;
   max-width: 100%;
@@ -69,6 +135,9 @@
   height: auto;
   object-fit: contain;
   margin: 0 auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
 }
 
 .mm-lightbox__diagram {

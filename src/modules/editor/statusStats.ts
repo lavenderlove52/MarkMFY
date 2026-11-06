@@ -17,6 +17,12 @@ export const editorDocStats = shallowRef<EditorDocStats | null>(null);
 
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
 
+function statsDebounceMs(length: number): number {
+  if (length >= 1_000_000) return 800;
+  if (length >= 250_000) return 400;
+  return 120;
+}
+
 export function clearEditorDocStats(): void {
   if (statsTimer != null) {
     clearTimeout(statsTimer);
@@ -62,7 +68,7 @@ export function publishEditorDocStats(doc: Text, immediate = false): void {
     return;
   }
   if (statsTimer != null) clearTimeout(statsTimer);
-  statsTimer = setTimeout(run, 120);
+  statsTimer = setTimeout(run, statsDebounceMs(doc.length));
 }
 
 export function publishEditorDocStatsFromText(text: string, immediate = false): void {
@@ -79,7 +85,7 @@ export function publishEditorDocStatsFromText(text: string, immediate = false): 
     return;
   }
   if (statsTimer != null) clearTimeout(statsTimer);
-  statsTimer = setTimeout(run, 120);
+  statsTimer = setTimeout(run, statsDebounceMs(text.length));
 }
 
 export function formatByteSize(bytes: number): string {

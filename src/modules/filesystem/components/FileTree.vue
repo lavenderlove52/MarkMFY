@@ -11,8 +11,10 @@ const props = withDefaults(
     selectedPath?: string | null;
     /** 仅最外层树负责右键菜单 DOM */
     root?: boolean;
+    /** 工作区没有文件时显示在树空白区域内的提示。 */
+    emptyText?: string;
   }>(),
-  { root: true, activePath: undefined, selectedPath: null },
+  { root: true, activePath: undefined, selectedPath: null, emptyText: "" },
 );
 
 const emit = defineEmits<{
@@ -21,6 +23,7 @@ const emit = defineEmits<{
   select: [node: FileTreeNode];
   createFile: [node: FileTreeNode | null];
   createFolder: [node: FileTreeNode | null];
+  clearSelection: [];
   revealInDir: [node: FileTreeNode];
   /** 子树把右键坐标冒泡给根节点 */
   contextMenuAt: [payload: { node: FileTreeNode; x: number; y: number }];
@@ -29,7 +32,7 @@ const emit = defineEmits<{
 interface ContextMenuState {
   x: number;
   y: number;
-  node: FileTreeNode;
+  node: FileTreeNode | null;
 }
 
 const contextMenu = ref<ContextMenuState | null>(null);
@@ -43,11 +46,11 @@ function onNodeClick(node: FileTreeNode): void {
   }
 }
 
-function openMenu(node: FileTreeNode, x: number, y: number): void {
-  emit("select", node);
+function openMenu(node: FileTreeNode | null, x: number, y: number): void {
+  if (node) emit("select", node);
   if (props.root) {
     contextMenu.value = { x, y, node };
-  } else {
+  } else if (node) {
     emit("contextMenuAt", { node, x, y });
   }
 }
@@ -60,6 +63,14 @@ function onContextMenu(event: MouseEvent, node: FileTreeNode): void {
 
 function onChildContextMenu(payload: { node: FileTreeNode; x: number; y: number }): void {
   openMenu(payload.node, payload.x, payload.y);
+}
+
+function onBlankContextMenu(event: MouseEvent): void {
+  if (!props.root) return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit("clearSelection");
+  openMenu(null, event.clientX, event.clientY);
 }
 
 function closeContextMenu(): void {
@@ -97,38 +108,47 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ul class="file-tree" :class="{ 'file-tree--root': props.root }">
-    <li v-for="node in props.nodes" :key="node.path">
-      <div
-        class="file-tree__row"
-        :class="{
-          'file-tree__row--active': node.path === props.activePath,
-          'file-tree__row--selected': node.path === props.selectedPath,
-        }"
-        @click="onNodeClick(node)"
-        @contextmenu="onContextMenu($event, node)"
-      >
-        <span class="file-tree__icon">
-          {{ node.isDir ? (node.expanded ? "▾" : "▸") : "·" }}
-        </span>
-        <span class="file-tree__name">{{ node.name }}</span>
-      </div>
-      <FileTree
-        v-if="node.isDir && node.expanded && node.children"
-        :root="false"
-        :nodes="node.children"
-        :active-path="props.activePath"
-        :selected-path="props.selectedPath"
-        @toggle="(child) => emit('toggle', child)"
-        @open-file="(child) => emit('openFile', child)"
-        @select="(child) => emit('select', child)"
-        @create-file="(child) => emit('createFile', child)"
-        @create-folder="(child) => emit('createFolder', child)"
-        @reveal-in-dir="(child) => emit('revealInDir', child)"
-        @context-menu-at="onChildContextMenu"
-      />
-    </li>
-  </ul>
+  <div
+    class="file-tree__container"
+    :class="{ 'file-tree__container--root': props.root }"
+    @contextmenu="onBlankContextMenu"
+  >
+    <div v-if="props.root && props.nodes.length === 0 && props.emptyText" class="file-tree__empty">
+      {{ props.emptyText }}
+    </div>
+    <ul class="file-tree" :class="{ 'file-tree--root': props.root }">
+      <li v-for="node in props.nodes" :key="node.path">
+        <div
+          class="file-tree__row"
+          :class="{
+            'file-tree__row--active': node.path === props.activePath,
+            'file-tree__row--selected': node.path === props.selectedPath,
+          }"
+          @click="onNodeClick(node)"
+          @contextmenu="onContextMenu($event, node)"
+        >
+          <span class="file-tree__icon">
+            {{ node.isDir ? (node.expanded ? "▾" : "▸") : "·" }}
+          </span>
+          <span class="file-tree__name">{{ node.name }}</span>
+        </div>
+        <FileTree
+          v-if="node.isDir && node.expanded && node.children"
+          :root="false"
+          :nodes="node.children"
+          :active-path="props.activePath"
+          :selected-path="props.selectedPath"
+          @toggle="(child) => emit('toggle', child)"
+          @open-file="(child) => emit('openFile', child)"
+          @select="(child) => emit('select', child)"
+          @create-file="(child) => emit('createFile', child)"
+          @create-folder="(child) => emit('createFolder', child)"
+          @reveal-in-dir="(child) => emit('revealInDir', child)"
+          @context-menu-at="onChildContextMenu"
+        />
+      </li>
+    </ul>
+  </div>
 
   <Teleport v-if="props.root" to="body">
     <div
@@ -162,7 +182,21 @@ onBeforeUnmount(() => {
   padding: 4px 6px 4px 12px;
 }
 
+.file-tree__container {
+  min-height: 0;
+}
+
+.file-tree__container--root {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .file-tree--root {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   padding-top: 2px;
 }
 
@@ -205,6 +239,12 @@ onBeforeUnmount(() => {
 .file-tree__name {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.file-tree__empty {
+  padding: 16px;
+  color: var(--mm-color-text-muted);
+  font-size: 13px;
 }
 </style>
 

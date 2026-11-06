@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { setActiveTabContentReader, setApplyStoreContentToEditor, useTabsStore } from "../tabs";
@@ -7,12 +7,11 @@ import { savePastedImage, toAssetUrl } from "../../ipc";
 import { createEditorExtensions, loadPlainFileLanguage } from "./core/setup";
 import { convertHtmlToMarkdown } from "./core/htmlPaste";
 import { dirName, joinPath } from "./core/paths";
-import {
-  setEditorNavigateHandler,
-  setEditorReplaceHandler,
-} from "./navBridge";
+import { setEditorNavigateHandler, setEditorReplaceHandler } from "./navBridge";
 import { setActiveEditorView } from "./formatBridge";
 import { findNextInDoc, replaceAllInDoc } from "./textReplace";
+import { flushPendingCodeBlockEdits } from "./decorations/codeBlockWidget";
+import { showToast, toastError } from "../../notify";
 import {
   clearEditorDocStats,
   publishEditorDocStats,
@@ -20,12 +19,19 @@ import {
 } from "./statusStats";
 import type { Compartment } from "@codemirror/state";
 import { isMarkdownPath } from "./language/fileMode";
+import ImageFileViewer from "./components/ImageFileViewer.vue";
 
 const tabsStore = useTabsStore();
+const isImageTab = computed(() => tabsStore.activeTab?.kind === "image");
+const activeImageSrc = computed(() => {
+  const tab = tabsStore.activeTab;
+  return tab?.kind === "image" ? toAssetUrl(tab.filePath) : "";
+});
 const containerRef = ref<HTMLDivElement | null>(null);
 const renderError = ref<string | null>(null);
 const fallbackContent = ref("");
-const LARGE_DOCUMENT_CHARS = 20 * 1024 * 1024;
+// Live Preview 每轮输入都会更新行内装饰与整块 Widget，2MB 后优先保证输入和滚动。
+const LARGE_DOCUMENT_CHARS = 2 * 1024 * 1024;
 let view: EditorView | null = null;
 /** 当前 view 对应的 tabId（切 tab 时先物化旧文档用）。 */
 let boundTabId: string | null = null;
@@ -52,6 +58,33 @@ function onDirty(): void {
   tabsStore.markDirty(tab.id);
 }
 
+interface AsyncPasteTarget {
+  view: EditorView;
+  tabId: string;
+  doc: EditorState["doc"];
+  from: number;
+  to: number;
+}
+
+function captureAsyncPasteTarget(): AsyncPasteTarget | null {
+  const tab = tabsStore.activeTab;
+  if (!tab || !view) return null;
+  const selection = view.state.selection.main;
+  return {
+    view,
+    tabId: tab.id,
+    doc: view.state.doc,
+    from: selection.from,
+    to: selection.to,
+  };
+}
+
+function isAsyncPasteTargetCurrent(target: AsyncPasteTarget): boolean {
+  return (
+    view === target.view && tabsStore.activeTabId === target.tabId && view.state.doc === target.doc
+  );
+}
+
 async function onSave(): Promise<void> {
   const tab = tabsStore.activeTab;
   if (!tab) return;
@@ -60,13 +93,23 @@ async function onSave(): Promise<void> {
 
 async function onPasteImage(file: File): Promise<void> {
   const tab = tabsStore.activeTab;
-  if (!tab || !view) return;
-  const buffer = await file.arrayBuffer();
-  const ext = file.type.split("/")[1] ?? "png";
-  const fileName = `pasted-${Date.now()}.${ext}`;
-  const relativePath = await savePastedImage(tab.filePath, fileName, new Uint8Array(buffer));
-  const pos = view.state.selection.main.from;
-  view.dispatch({ changes: { from: pos, insert: `![](${relativePath})` } });
+  const target = captureAsyncPasteTarget();
+  if (!tab || !target) return;
+  try {
+    const buffer = await file.arrayBuffer();
+    const ext = file.type.split("/")[1] ?? "png";
+    const fileName = `pasted-${Date.now()}.${ext}`;
+    const relativePath = await savePastedImage(tab.filePath, fileName, new Uint8Array(buffer));
+    if (!isAsyncPasteTargetCurrent(target)) {
+      showToast("文件内容已变化，已取消本次图片粘贴", "info");
+      return;
+    }
+    target.view.dispatch({
+      changes: { from: target.from, to: target.to, insert: `![](${relativePath})` },
+    });
+  } catch (err) {
+    toastError(err, "插入图片失败");
+  }
 }
 
 /**
@@ -75,7 +118,8 @@ async function onPasteImage(file: File): Promise<void> {
  */
 async function onPasteHtml(html: string, plainFallback: string): Promise<void> {
   const tab = tabsStore.activeTab;
-  if (!tab || !view) return;
+  const target = captureAsyncPasteTarget();
+  if (!tab || !target) return;
   let markdown = "";
   try {
     markdown = await convertHtmlToMarkdown(html, { markdownFilePath: tab.filePath });
@@ -83,25 +127,32 @@ async function onPasteHtml(html: string, plainFallback: string): Promise<void> {
     console.warn("[markmfy] 富文本粘贴转换失败，退回纯文本", err);
   }
   const insertText = markdown.trim() ? markdown : plainFallback;
-  if (!insertText || !view) return;
-  const sel = view.state.selection.main;
-  view.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: insertText },
-    selection: { anchor: sel.from + insertText.length },
+  if (!insertText) return;
+  if (!isAsyncPasteTargetCurrent(target)) {
+    showToast("文件内容已变化，已取消本次富文本粘贴", "info");
+    return;
+  }
+  target.view.dispatch({
+    changes: { from: target.from, to: target.to, insert: insertText },
+    selection: { anchor: target.from + insertText.length },
   });
 }
 
 function createState(content: string, filePath = ""): EditorState {
   const largeDocument = isLargeDocument(content);
-  const bundle = createEditorExtensions(filePath, {
-    onDirty,
-    onSave: () => void onSave(),
-    resolveImageSrc,
-    onPasteImage: (file) => void onPasteImage(file),
-    onPasteHtml: (html, plainFallback) => void onPasteHtml(html, plainFallback),
-  }, {
-    largeDocument,
-  });
+  const bundle = createEditorExtensions(
+    filePath,
+    {
+      onDirty,
+      onSave: () => void onSave(),
+      resolveImageSrc,
+      onPasteImage: (file) => void onPasteImage(file),
+      onPasteHtml: (html, plainFallback) => void onPasteHtml(html, plainFallback),
+    },
+    {
+      largeDocument,
+    },
+  );
   languageCompartment = bundle.languageCompartment;
   const statsExt =
     filePath && isMarkdownPath(filePath) && !largeDocument
@@ -146,6 +197,9 @@ function onFallbackInput(event: Event): void {
 
 function flushBoundTab(): void {
   if (!view || !boundTabId) return;
+  const boundTab = tabsStore.tabs.find((tab) => tab.id === boundTabId);
+  if (boundTab?.kind === "image") return;
+  flushPendingCodeBlockEdits(view);
   tabsStore.syncContent(boundTabId, view.state.doc.toString());
 }
 
@@ -153,7 +207,9 @@ function applyStoreToView(): void {
   if (!view || !boundTabId) return;
   const tab = tabsStore.tabs.find((t) => t.id === boundTabId);
   if (!tab) return;
-  view.setState(createState(tab.content, tab.filePath));
+  view.setState(
+    createState(tab.kind === "image" ? "" : tab.content, tab.kind === "image" ? "" : tab.filePath),
+  );
   fallbackContent.value = tab.content;
   refreshStatusStats(tab.content, tab.filePath);
   scheduleLanguageLoad(tab.filePath);
@@ -176,19 +232,23 @@ onMounted(() => {
   const tab = tabsStore.activeTab;
   const initialContent = tab?.content ?? "";
   const initialPath = tab?.filePath ?? "";
+  const initialIsImage = tab?.kind === "image";
   boundTabId = tab?.id ?? null;
   try {
     view = new EditorView({
-      state: createState(initialContent, initialPath),
+      state: createState(initialIsImage ? "" : initialContent, initialIsImage ? "" : initialPath),
       parent: containerRef.value,
     });
     setActiveEditorView(view);
-    refreshStatusStats(initialContent, initialPath);
-    scheduleLanguageLoad(initialPath);
+    refreshStatusStats(initialIsImage ? "" : initialContent, initialIsImage ? "" : initialPath);
+    if (!initialIsImage) scheduleLanguageLoad(initialPath);
     // 打开文件后立刻聚焦，避免 WebView 未聚焦时单击/双击无响应
-    requestAnimationFrame(() => view?.focus());
+    if (!initialIsImage) requestAnimationFrame(() => view?.focus());
     setActiveTabContentReader(() => {
       if (!view || !boundTabId) return null;
+      const boundTab = tabsStore.tabs.find((tab) => tab.id === boundTabId);
+      if (boundTab?.kind === "image") return null;
+      flushPendingCodeBlockEdits(view);
       return { tabId: boundTabId, content: view.state.doc.toString() };
     });
     setApplyStoreContentToEditor(applyStoreToView);
@@ -241,11 +301,15 @@ watch(
     const nextTab = tabsStore.activeTab;
     const content = nextTab?.content ?? "";
     const filePath = nextTab?.filePath ?? "";
+    const nextIsImage = nextTab?.kind === "image";
     boundTabId = nextId;
 
     if (view) {
       try {
         if (nextId == null) {
+          view.setState(createState(""));
+          clearEditorDocStats();
+        } else if (nextIsImage) {
           view.setState(createState(""));
           clearEditorDocStats();
         } else {
@@ -267,7 +331,7 @@ watch(
       }
     }
     fallbackContent.value = content;
-    refreshStatusStats(content, filePath);
+    refreshStatusStats(nextIsImage ? "" : content, nextIsImage ? "" : filePath);
   },
 );
 
@@ -298,7 +362,12 @@ onBeforeUnmount(() => {
       :value="fallbackContent"
       @input="onFallbackInput"
     ></textarea>
-    <div v-show="!renderError" ref="containerRef" class="mm-editor"></div>
+    <ImageFileViewer
+      v-if="isImageTab"
+      :src="activeImageSrc"
+      :file-name="tabsStore.activeTab?.fileName ?? ''"
+    />
+    <div v-show="!isImageTab && !renderError" ref="containerRef" class="mm-editor"></div>
   </div>
 </template>
 
@@ -382,5 +451,52 @@ onBeforeUnmount(() => {
   background: var(--mm-color-editor, var(--mm-color-bg-muted));
   color: var(--mm-color-text-tertiary, var(--mm-color-text-muted));
   border-right: 1px solid var(--mm-color-border);
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-editor) {
+  height: auto;
+  min-height: 0;
+  color: var(--mm-code-text);
+  caret-color: var(--mm-code-accent);
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-scroller) {
+  overflow: visible;
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-content) {
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 14px 16px 18px 0;
+  caret-color: var(--mm-code-accent);
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-gutters) {
+  background: transparent;
+  border-right: 0;
+  color: var(--mm-code-muted);
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-line) {
+  padding-left: 18px;
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-lineNumbers .cm-gutterElement) {
+  min-width: 54px;
+  padding: 0 16px 0 10px;
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-activeLine) {
+  background: var(--mm-code-hover);
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-selectionBackground),
+.mm-editor :deep(.mm-code-block__editor .cm-content ::selection) {
+  background: color-mix(in srgb, var(--mm-code-accent) 35%, transparent) !important;
+}
+
+.mm-editor :deep(.mm-code-block__editor .cm-cursor) {
+  border-left-color: var(--mm-code-accent);
 }
 </style>

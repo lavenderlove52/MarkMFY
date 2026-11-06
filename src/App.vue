@@ -4,11 +4,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useWorkspaceStore, FileTree, type FileTreeNode } from "./modules/filesystem";
 import { useTabsStore, TabsBar, ExternalChangeDialog } from "./modules/tabs";
 import { Editor, FormatToolbar, EditorStatusBar, isMarkdownPath, dirName } from "./modules/editor";
-import { GitPanel } from "./modules/git";
+import { GitPanel, useGitStore } from "./modules/git";
 import { SearchPanel, useSearchStore } from "./modules/search";
 import { SettingsPanel, useSettingsStore } from "./modules/settings";
 import { applyTheme } from "./modules/theme";
 import ToastHost from "./components/ToastHost.vue";
+import InputDialog from "./components/InputDialog.vue";
 import { toastError } from "./notify";
 import {
   CommandPalette,
@@ -27,6 +28,7 @@ const workspaceStore = useWorkspaceStore();
 const tabsStore = useTabsStore();
 const settingsStore = useSettingsStore();
 const searchStore = useSearchStore();
+const gitStore = useGitStore();
 const settingsOpen = ref(false);
 const commandPaletteOpen = ref(false);
 const windowMaximized = ref(false);
@@ -35,8 +37,93 @@ const sidebarWidth = ref(240);
 const gitPanelWidth = ref(320);
 const sidebarOpen = ref(true);
 const gitPanelOpen = ref(true);
+const refreshingWorkspace = ref(false);
+const SIDEBAR_MIN_WIDTH = 160;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_COLLAPSE_MIN_WIDTH = 104;
+const SIDEBAR_COLLAPSE_MAX_WIDTH = 140;
 
 const activePath = computed(() => tabsStore.activeTab?.filePath);
+const navigationHistory = ref<string[]>([]);
+const navigationIndex = ref(-1);
+const openTabPaths = computed(() => new Set(tabsStore.tabs.map((tab) => tab.filePath)));
+let navigatingHistoryTo: string | null = null;
+
+function findHistoryTarget(step: -1 | 1): { path: string; index: number } | null {
+  let index = navigationIndex.value + step;
+  while (index >= 0 && index < navigationHistory.value.length) {
+    const path = navigationHistory.value[index];
+    if (path && openTabPaths.value.has(path)) return { path, index };
+    index += step;
+  }
+  return null;
+}
+
+const canNavigateBack = computed(() => findHistoryTarget(-1) !== null);
+const canNavigateForward = computed(() => findHistoryTarget(1) !== null);
+
+function navigateHistory(step: -1 | 1): void {
+  const target = findHistoryTarget(step);
+  if (!target || !tabsStore.tabs.some((tab) => tab.filePath === target.path)) return;
+  navigationIndex.value = target.index;
+  navigatingHistoryTo = target.path;
+  tabsStore.setActive(target.path);
+}
+
+watch(activePath, (path) => {
+  if (!path) return;
+  if (navigatingHistoryTo === path) {
+    navigatingHistoryTo = null;
+    return;
+  }
+  const current = navigationHistory.value[navigationIndex.value];
+  if (current === path) return;
+  navigationHistory.value = [...navigationHistory.value.slice(0, navigationIndex.value + 1), path];
+  if (navigationHistory.value.length > 200) {
+    navigationHistory.value.splice(0, navigationHistory.value.length - 200);
+  }
+  navigationIndex.value = navigationHistory.value.length - 1;
+});
+
+type NewItemKind = "file" | "folder";
+const newItemDialogOpen = ref(false);
+const newItemDialogKind = ref<NewItemKind>("file");
+let resolveNewItemName: ((value: string | null) => void) | null = null;
+
+const newItemDialogTitle = computed(() =>
+  newItemDialogKind.value === "file" ? "新建 Markdown 文件" : "新建文件夹",
+);
+const newItemDialogLabel = computed(() =>
+  newItemDialogKind.value === "file" ? "文件名（可省略 .md）" : "文件夹名称",
+);
+const newItemDialogInitialValue = computed(() =>
+  newItemDialogKind.value === "file" ? "未命名" : "新建文件夹",
+);
+
+function requestNewItemName(kind: NewItemKind): Promise<string | null> {
+  resolveNewItemName?.(null);
+  newItemDialogKind.value = kind;
+  newItemDialogOpen.value = true;
+  return new Promise((resolve) => {
+    resolveNewItemName = resolve;
+  });
+}
+
+function closeNewItemDialog(value: string | null): void {
+  newItemDialogOpen.value = false;
+  const resolve = resolveNewItemName;
+  resolveNewItemName = null;
+  resolve?.(value);
+}
+
+function confirmNewItemName(value: string): void {
+  closeNewItemDialog(value);
+}
+
+function cancelNewItemName(): void {
+  closeNewItemDialog(null);
+}
+
 const showFormatToolbar = computed(
   () => !!tabsStore.activeTab && isMarkdownPath(tabsStore.activeTab.filePath),
 );
@@ -101,6 +188,8 @@ let layoutPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let resizing: "sidebar" | "git" | null = null;
 let resizeStartX = 0;
 let resizeStartWidth = 0;
+let resizeFrame: number | null = null;
+let pendingResizeEvent: MouseEvent | null = null;
 
 function syncThemeFromSettings(): void {
   applyTheme(
@@ -146,22 +235,77 @@ function toggleGitPanel(): void {
   schedulePersistLayout();
 }
 
-function onResizeMove(event: MouseEvent): void {
+function toggleGitHistoryPanel(): void {
+  if (gitPanelOpen.value && gitStore.activeTab === "history") {
+    gitPanelOpen.value = false;
+  } else {
+    gitStore.setActiveTab("history");
+    gitPanelOpen.value = true;
+  }
+  schedulePersistLayout();
+}
+
+function applyResizeMove(event: MouseEvent): void {
   if (!resizing) return;
   const dx = event.clientX - resizeStartX;
   if (resizing === "sidebar") {
-    sidebarWidth.value = Math.min(480, Math.max(160, Math.round(resizeStartWidth + dx)));
+    const nextWidth = Math.min(
+      SIDEBAR_MAX_WIDTH,
+      Math.max(SIDEBAR_COLLAPSE_MIN_WIDTH - 1, Math.round(resizeStartWidth + dx)),
+    );
+    const collapseWidth = Math.max(
+      SIDEBAR_COLLAPSE_MIN_WIDTH,
+      Math.min(SIDEBAR_COLLAPSE_MAX_WIDTH, Math.round(resizeStartWidth * 0.55)),
+    );
+    if (nextWidth <= collapseWidth) {
+      // 收起时保留拖动前宽度，重新展开不会得到一条极窄的侧边栏。
+      sidebarWidth.value = resizeStartWidth;
+      sidebarOpen.value = false;
+      stopColumnResize();
+      schedulePersistLayout();
+      return;
+    }
+    sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth));
   } else {
     gitPanelWidth.value = Math.min(560, Math.max(220, Math.round(resizeStartWidth - dx)));
   }
 }
 
-function onResizeUp(): void {
-  if (!resizing) return;
+function onResizeMove(event: MouseEvent): void {
+  pendingResizeEvent = event;
+  if (resizeFrame != null) return;
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = null;
+    const next = pendingResizeEvent;
+    pendingResizeEvent = null;
+    if (next) applyResizeMove(next);
+  });
+}
+
+function stopColumnResize(): void {
   resizing = null;
+  pendingResizeEvent = null;
+  if (resizeFrame != null) {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = null;
+  }
   document.body.classList.remove("mm-resizing-col");
   window.removeEventListener("mousemove", onResizeMove);
   window.removeEventListener("mouseup", onResizeUp);
+  window.removeEventListener("blur", onResizeUp);
+}
+
+function onResizeUp(): void {
+  if (!resizing) return;
+  const pending = pendingResizeEvent;
+  pendingResizeEvent = null;
+  if (resizeFrame != null) {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = null;
+  }
+  if (pending) applyResizeMove(pending);
+  if (!resizing) return;
+  stopColumnResize();
   schedulePersistLayout();
 }
 
@@ -174,6 +318,7 @@ function startResize(which: "sidebar" | "git", event: MouseEvent): void {
   document.body.classList.add("mm-resizing-col");
   window.addEventListener("mousemove", onResizeMove);
   window.addEventListener("mouseup", onResizeUp);
+  window.addEventListener("blur", onResizeUp);
 }
 
 function openSettings(): void {
@@ -254,6 +399,8 @@ onMounted(() => {
     closeCommandPalette,
     isCommandPaletteOpen: () => commandPaletteOpen.value,
     openSearch,
+    createMarkdown: () => createMarkdownNear(null),
+    createFolder: () => createFolderNear(null),
   });
 
   uninstallKeymap = installGlobalKeymap((e) => {
@@ -338,11 +485,9 @@ onBeforeUnmount(() => {
   unlistenWindowResize?.();
   unlistenWindowResize = null;
   if (layoutPersistTimer) clearTimeout(layoutPersistTimer);
-  window.removeEventListener("mousemove", onResizeMove);
-  window.removeEventListener("mouseup", onResizeUp);
+  stopColumnResize();
   window.removeEventListener("click", closeToolbarMenu);
   window.removeEventListener("focus", onWindowFocusCheckExternalChanges);
-  document.body.classList.remove("mm-resizing-col");
 });
 
 watch(
@@ -396,18 +541,20 @@ function onSelectNode(node: FileTreeNode): void {
 }
 
 async function createMarkdownNear(node: FileTreeNode | null): Promise<void> {
+  if (!workspaceStore.isOpen && !(await workspaceStore.openFolder())) return;
   if (node) workspaceStore.selectPath(node.path);
-  const name = window.prompt("新建 Markdown 文件名（可省略 .md）", "未命名");
+  const name = await requestNewItemName("file");
   if (name === null) return;
-  const path = await workspaceStore.createMarkdownFile(name.trim() || null);
+  const path = await workspaceStore.createMarkdownFile(name || null);
   if (path) await tabsStore.openFile(path);
 }
 
 async function createFolderNear(node: FileTreeNode | null): Promise<void> {
+  if (!workspaceStore.isOpen && !(await workspaceStore.openFolder())) return;
   if (node) workspaceStore.selectPath(node.path);
-  const name = window.prompt("新建文件夹名称", "新建文件夹");
+  const name = await requestNewItemName("folder");
   if (name === null) return;
-  await workspaceStore.createFolder(name.trim() || null);
+  await workspaceStore.createFolder(name || null);
 }
 
 async function onRevealInDir(node: FileTreeNode): Promise<void> {
@@ -427,6 +574,16 @@ async function onCreateFolderToolbar(): Promise<void> {
   await createFolderNear(null);
 }
 
+async function refreshWorkspaceTree(): Promise<void> {
+  if (!workspaceStore.isOpen || refreshingWorkspace.value) return;
+  refreshingWorkspace.value = true;
+  try {
+    await workspaceStore.refresh();
+  } finally {
+    refreshingWorkspace.value = false;
+  }
+}
+
 function onKeybindingsChange(overrides: Record<string, string>): void {
   syncCommandKeybindings(overrides);
 }
@@ -435,6 +592,90 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
 <template>
   <div class="app-shell">
     <header class="app-shell__toolbar" @click.stop>
+      <div class="app-shell__toolbar-leading">
+        <button
+          type="button"
+          class="app-shell__header-icon-btn"
+          title="后退"
+          aria-label="后退"
+          :disabled="!canNavigateBack"
+          @click="navigateHistory(-1)"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="M11.8 4.7 6.5 10l5.3 5.3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="app-shell__header-icon-btn"
+          title="前进"
+          aria-label="前进"
+          :disabled="!canNavigateForward"
+          @click="navigateHistory(1)"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="m8.2 4.7 5.3 5.3-5.3 5.3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="app-shell__header-icon-btn app-shell__sidebar-toggle"
+          :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+          :aria-label="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+          :aria-expanded="sidebarOpen"
+          aria-controls="workspace-sidebar"
+          @click="toggleSidebar"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <rect
+              x="2.25"
+              y="3.5"
+              width="15.5"
+              height="13"
+              rx="2.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+            />
+            <rect x="4.9" y="6.15" width="4.6" height="7.7" rx="1" fill="currentColor" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="app-shell__header-icon-btn"
+          :class="{ 'app-shell__header-icon-btn--active': gitPanelOpen }"
+          :title="
+            gitPanelOpen && gitStore.activeTab === 'history' ? '收起 Git 记录' : '打开 Git 记录'
+          "
+          :aria-label="
+            gitPanelOpen && gitStore.activeTab === 'history' ? '收起 Git 记录' : '打开 Git 记录'
+          "
+          :aria-expanded="gitPanelOpen"
+          :disabled="!workspaceStore.isOpen"
+          @click="toggleGitHistoryPanel"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="5" r="2" />
+            <circle cx="6" cy="19" r="2" />
+            <circle cx="18" cy="7" r="2" />
+            <path d="M6 7v10M18 9c0 4-3 6-6 6H6" />
+          </svg>
+        </button>
+      </div>
       <nav class="app-shell__menus" aria-label="主功能菜单">
         <div class="app-shell__menu">
           <button
@@ -490,7 +731,6 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             <button
               type="button"
               class="app-shell__menu-item"
-              :disabled="!workspaceStore.isOpen"
               @click="runToolbarAction(() => runCommand('workspace.newFile'))"
             >
               新建 Markdown
@@ -498,7 +738,6 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             <button
               type="button"
               class="app-shell__menu-item"
-              :disabled="!workspaceStore.isOpen"
               @click="runToolbarAction(() => runCommand('workspace.newFolder'))"
             >
               新建文件夹
@@ -553,10 +792,18 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             视图
           </button>
           <div v-if="openToolbarMenu === 'view'" class="app-shell__menu-list">
-            <button type="button" class="app-shell__menu-item" @click="runToolbarAction(toggleSidebar)">
+            <button
+              type="button"
+              class="app-shell__menu-item"
+              @click="runToolbarAction(toggleSidebar)"
+            >
               {{ sidebarOpen ? "隐藏目录" : "显示目录" }}
             </button>
-            <button type="button" class="app-shell__menu-item" @click="runToolbarAction(toggleGitPanel)">
+            <button
+              type="button"
+              class="app-shell__menu-item"
+              @click="runToolbarAction(toggleGitPanel)"
+            >
               {{ gitPanelOpen ? "隐藏 Git 面板" : "显示 Git 面板" }}
             </button>
           </div>
@@ -573,7 +820,11 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             查找
           </button>
           <div v-if="openToolbarMenu === 'search'" class="app-shell__menu-list">
-            <button type="button" class="app-shell__menu-item" @click="runToolbarAction(() => openSearch('file'))">
+            <button
+              type="button"
+              class="app-shell__menu-item"
+              @click="runToolbarAction(() => openSearch('file'))"
+            >
               当前文件查找
             </button>
             <button
@@ -627,7 +878,11 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
             工具
           </button>
           <div v-if="openToolbarMenu === 'tools'" class="app-shell__menu-list">
-            <button type="button" class="app-shell__menu-item" @click="runToolbarAction(openCommandPalette)">
+            <button
+              type="button"
+              class="app-shell__menu-item"
+              @click="runToolbarAction(openCommandPalette)"
+            >
               命令面板
             </button>
           </div>
@@ -643,11 +898,7 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
           </button>
         </div>
       </nav>
-      <div
-        class="app-shell__drag"
-        data-tauri-drag-region
-        @dblclick="toggleMaximizeWindow"
-      >
+      <div class="app-shell__drag" data-tauri-drag-region @dblclick="toggleMaximizeWindow">
         <span class="app-shell__path" data-tauri-drag-region :title="workspaceStore.rootPath ?? ''">
           {{ workspaceStore.rootPath ?? "未打开工作区" }}
         </span>
@@ -686,6 +937,7 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
     <div class="app-shell__main">
       <aside
         v-if="sidebarOpen"
+        id="workspace-sidebar"
         class="app-shell__sidebar"
         :style="{ width: `${sidebarWidth}px` }"
       >
@@ -694,45 +946,77 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
           <div class="app-shell__sidebar-actions">
             <button
               type="button"
-              class="app-shell__panel-toggle"
+              class="app-shell__panel-toggle app-shell__panel-toggle--icon"
               title="新建 Markdown"
-              :disabled="!workspaceStore.isOpen"
+              aria-label="新建 Markdown"
               @click="onCreateFileToolbar"
             >
-              +md
+              <svg class="app-shell__tree-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2Z" />
+                <path d="M14 2v6h6M12 18v-6M9 15h6" />
+              </svg>
             </button>
             <button
               type="button"
-              class="app-shell__panel-toggle"
+              class="app-shell__panel-toggle app-shell__panel-toggle--icon"
               title="新建文件夹"
-              :disabled="!workspaceStore.isOpen"
+              aria-label="新建文件夹"
               @click="onCreateFolderToolbar"
             >
-              +dir
+              <svg class="app-shell__tree-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                />
+                <path d="M12 10v6M9 13h6" />
+              </svg>
             </button>
             <button
               type="button"
-              class="app-shell__panel-toggle"
-              title="合上目录"
-              @click="toggleSidebar"
+              class="app-shell__panel-toggle app-shell__panel-toggle--icon"
+              title="刷新当前文件夹"
+              aria-label="刷新当前文件夹"
+              :aria-busy="refreshingWorkspace"
+              :disabled="!workspaceStore.isOpen || refreshingWorkspace"
+              @click="refreshWorkspaceTree"
             >
-              ⟨
+              <svg
+                class="app-shell__refresh-icon"
+                :class="{ 'app-shell__refresh-icon--spinning': refreshingWorkspace }"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <path
+                  d="M16 7.3A6.5 6.5 0 1 0 16.2 12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M16.2 4.1v3.5h-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
             </button>
           </div>
         </div>
         <FileTree
-          v-if="workspaceStore.tree.length > 0"
           :nodes="workspaceStore.tree"
           :active-path="activePath"
           :selected-path="workspaceStore.selectedPath"
+          empty-text="打开一个文件夹，或点击 +md 新建 Markdown"
           @toggle="onToggle"
           @open-file="onOpenFile"
           @select="onSelectNode"
+          @clear-selection="workspaceStore.selectPath(null)"
           @create-file="createMarkdownNear"
           @create-folder="createFolderNear"
           @reveal-in-dir="onRevealInDir"
         />
-        <div v-else class="app-shell__empty">打开一个文件夹开始编辑</div>
       </aside>
       <div
         v-if="sidebarOpen"
@@ -740,16 +1024,6 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
         title="拖拽调整目录宽度"
         @mousedown="startResize('sidebar', $event)"
       ></div>
-      <button
-        v-else
-        type="button"
-        class="app-shell__rail"
-        title="打开文件目录"
-        @click="toggleSidebar"
-      >
-        目录
-      </button>
-
       <section class="app-shell__editor">
         <TabsBar />
         <FormatToolbar v-if="showFormatToolbar" />
@@ -768,32 +1042,34 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
         title="拖拽调整 Git 面板宽度"
         @mousedown="startResize('git', $event)"
       ></div>
-      <button
-        v-else
-        type="button"
-        class="app-shell__rail"
-        title="打开 Git 面板"
-        @click="toggleGitPanel"
-      >
-        Git
-      </button>
-      <div
-        v-if="gitPanelOpen"
-        class="app-shell__git"
-        :style="{ width: `${gitPanelWidth}px` }"
-      >
+      <div v-if="gitPanelOpen" class="app-shell__git" :style="{ width: `${gitPanelWidth}px` }">
         <div class="app-shell__git-bar">
           <span>Git</span>
           <button
             type="button"
-            class="app-shell__panel-toggle"
-            title="合上 Git 面板"
+            class="app-shell__panel-toggle app-shell__panel-toggle--icon"
+            title="收起 Git 面板"
+            aria-label="收起 Git 面板"
+            aria-controls="git-panel"
+            aria-expanded="true"
             @click="toggleGitPanel"
           >
-            ⟩
+            <svg class="app-shell__panel-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <rect
+                x="2.25"
+                y="3.5"
+                width="15.5"
+                height="13"
+                rx="2.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+              />
+              <rect x="10.5" y="6.15" width="4.6" height="7.7" rx="1" fill="currentColor" />
+            </svg>
           </button>
         </div>
-        <GitPanel class="app-shell__git-panel" />
+        <GitPanel id="git-panel" class="app-shell__git-panel" />
       </div>
     </div>
 
@@ -801,6 +1077,14 @@ function onKeybindingsChange(overrides: Record<string, string>): void {
       :open="settingsOpen"
       @close="settingsOpen = false"
       @keybindings-change="onKeybindingsChange"
+    />
+    <InputDialog
+      :open="newItemDialogOpen"
+      :title="newItemDialogTitle"
+      :label="newItemDialogLabel"
+      :initial-value="newItemDialogInitialValue"
+      @confirm="confirmNewItemName"
+      @cancel="cancelNewItemName"
     />
     <CommandPalette :open="commandPaletteOpen" @close="closeCommandPalette" />
     <ToastHost />
@@ -864,6 +1148,58 @@ body.mm-resizing-col * {
   flex-shrink: 0;
   min-height: 36px;
   height: 36px;
+}
+
+.app-shell__toolbar-leading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+
+.app-shell__header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--mm-radius-sm);
+  background: transparent;
+  color: var(--mm-color-text-muted);
+  cursor: pointer;
+}
+
+.app-shell__header-icon-btn svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-shell__header-icon-btn:hover:not(:disabled) {
+  background: var(--mm-color-hover);
+  color: var(--mm-color-text);
+}
+
+.app-shell__header-icon-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.app-shell__header-icon-btn--active {
+  background: var(--mm-color-accent-soft);
+  color: var(--mm-color-accent);
+}
+
+.app-shell__sidebar-toggle {
+  color: var(--mm-color-text);
 }
 
 .app-shell__menus {
@@ -1098,6 +1434,53 @@ body.mm-resizing-col * {
   background: var(--mm-color-hover);
 }
 
+.app-shell__panel-toggle--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.app-shell__tree-action-icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-shell__panel-icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.app-shell__refresh-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.app-shell__refresh-icon--spinning {
+  animation: mm-refresh-spin 700ms linear infinite;
+}
+
+@keyframes mm-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__refresh-icon--spinning {
+    animation: none;
+  }
+}
+
 .app-shell__resizer {
   width: 5px;
   flex-shrink: 0;
@@ -1111,27 +1494,6 @@ body.mm-resizing-col * {
 .app-shell__resizer:active {
   background: var(--mm-color-accent);
   opacity: 0.28;
-}
-
-.app-shell__rail {
-  width: 28px;
-  flex-shrink: 0;
-  border: none;
-  border-right: 1px solid var(--mm-color-border);
-  border-left: 1px solid var(--mm-color-border);
-  background: var(--mm-color-panel);
-  color: var(--mm-color-text-muted);
-  font-size: 12px;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  letter-spacing: 0.12em;
-  cursor: pointer;
-  padding: 8px 0;
-}
-
-.app-shell__rail:hover {
-  color: var(--mm-color-accent);
-  background: var(--mm-color-active);
 }
 
 .app-shell__editor {

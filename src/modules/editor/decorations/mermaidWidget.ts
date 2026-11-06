@@ -4,6 +4,7 @@ import {
   copyTextToClipboard,
   createToolbarButton,
   createToolbarMenuButton,
+  disposeToolbarMenu,
   openLightbox,
 } from "./widgetDom";
 import { requestBlockSourceEdit } from "./blockSourceEdit";
@@ -429,8 +430,7 @@ export class MermaidWidget extends WidgetType {
         return;
       }
       const s = displayScale();
-      const overflow =
-        naturalW * s > viewport.clientWidth + 1 || naturalH * s > canvasH + 1;
+      const overflow = naturalW * s > viewport.clientWidth + 1 || naturalH * s > canvasH + 1;
       if (overflow) {
         e.preventDefault();
         e.stopPropagation();
@@ -498,6 +498,9 @@ export class MermaidWidget extends WidgetType {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       wrap.removeEventListener("wheel", onWheel, true);
+      for (const menu of wrap.querySelectorAll<HTMLElement>(".mm-widget-menu")) {
+        disposeToolbarMenu(menu);
+      }
       io?.disconnect();
       ro?.disconnect();
     };

@@ -20,17 +20,78 @@ export const markmfyHighlightStyle: HighlightStyle = HighlightStyle.define([
   { tag: [t.atom, t.bool, t.url, t.contentSeparator, t.labelName], color: "var(--mm-syntax-atom)" },
   { tag: [t.literal, t.inserted], color: "var(--mm-syntax-literal)" },
   { tag: [t.string, t.deleted], color: "var(--mm-syntax-string)" },
-  { tag: [t.regexp, t.escape, t.special(t.string)], color: "var(--mm-syntax-string)", fontStyle: "italic" },
+  {
+    tag: [t.regexp, t.escape, t.special(t.string)],
+    color: "var(--mm-syntax-string)",
+    fontStyle: "italic",
+  },
   { tag: t.definition(t.variableName), color: "var(--mm-syntax-literal)", fontWeight: "bold" },
   { tag: t.local(t.variableName), color: "var(--mm-syntax-type)" },
   { tag: [t.typeName, t.namespace], color: "var(--mm-syntax-type)", fontWeight: "bold" },
   { tag: t.className, color: "var(--mm-syntax-type)", fontStyle: "italic" },
-  { tag: [t.special(t.variableName), t.macroName], color: "var(--mm-syntax-atom)", fontStyle: "italic" },
+  {
+    tag: [t.special(t.variableName), t.macroName],
+    color: "var(--mm-syntax-atom)",
+    fontStyle: "italic",
+  },
   { tag: t.definition(t.propertyName), color: "var(--mm-syntax-keyword)", fontStyle: "italic" },
   { tag: t.comment, color: "var(--mm-syntax-comment)", fontStyle: "italic" },
   {
     tag: t.invalid,
     color: "var(--mm-color-danger)",
+    fontWeight: "bold",
+    textDecoration: "underline wavy",
+  },
+]);
+
+/**
+ * 代码块使用独立主题变量，配色由外层 `.mm-code-block[data-code-theme]`
+ * 提供。这样切换主题只更新 Widget 属性，不需要重建内嵌编辑器。
+ */
+export const codeBlockHighlightStyle: HighlightStyle = HighlightStyle.define([
+  { tag: t.meta, color: "var(--mm-code-syntax-meta)" },
+  { tag: t.link, color: "var(--mm-code-syntax-literal)", textDecoration: "underline" },
+  { tag: t.heading, color: "var(--mm-code-syntax-keyword)", fontWeight: "bold" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.strikethrough, textDecoration: "line-through" },
+  { tag: t.keyword, color: "var(--mm-code-syntax-keyword)" },
+  {
+    tag: [t.atom, t.bool, t.url, t.contentSeparator, t.labelName],
+    color: "var(--mm-code-syntax-atom)",
+  },
+  { tag: [t.literal, t.inserted], color: "var(--mm-code-syntax-literal)" },
+  { tag: [t.string, t.deleted], color: "var(--mm-code-syntax-string)" },
+  {
+    tag: [t.regexp, t.escape, t.special(t.string)],
+    color: "var(--mm-code-syntax-string)",
+  },
+  {
+    tag: t.definition(t.variableName),
+    color: "var(--mm-code-syntax-literal)",
+    fontWeight: "bold",
+  },
+  { tag: t.local(t.variableName), color: "var(--mm-code-syntax-type)" },
+  {
+    tag: [t.typeName, t.namespace],
+    color: "var(--mm-code-syntax-type)",
+    fontWeight: "bold",
+  },
+  { tag: t.className, color: "var(--mm-code-syntax-type)", fontStyle: "italic" },
+  {
+    tag: [t.special(t.variableName), t.macroName],
+    color: "var(--mm-code-syntax-atom)",
+    fontStyle: "italic",
+  },
+  {
+    tag: t.definition(t.propertyName),
+    color: "var(--mm-code-syntax-keyword)",
+    fontStyle: "italic",
+  },
+  { tag: t.comment, color: "var(--mm-code-syntax-comment)", fontStyle: "italic" },
+  {
+    tag: t.invalid,
+    color: "var(--mm-code-syntax-invalid)",
     fontWeight: "bold",
     textDecoration: "underline wavy",
   },

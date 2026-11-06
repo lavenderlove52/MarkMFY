@@ -44,6 +44,36 @@ function findNode(nodes: FileTreeNode[], path: string): FileTreeNode | null {
   return null;
 }
 
+function collectExpandedPaths(nodes: FileTreeNode[], result = new Set<string>()): Set<string> {
+  for (const node of nodes) {
+    if (node.isDir && node.expanded) result.add(node.path);
+    if (node.children) collectExpandedPaths(node.children, result);
+  }
+  return result;
+}
+
+async function restoreExpandedDirs(
+  nodes: FileTreeNode[],
+  expandedPaths: Set<string>,
+): Promise<void> {
+  await Promise.all(
+    nodes.map(async (node) => {
+      if (!node.isDir || !expandedPaths.has(node.path)) return;
+      try {
+        node.children = await buildChildren(node.path);
+        node.loaded = true;
+        node.expanded = true;
+        await restoreExpandedDirs(node.children, expandedPaths);
+      } catch {
+        // 单个目录刷新失败不应影响其它已展开目录；保留为可再次展开的初始状态。
+        node.children = [];
+        node.loaded = false;
+        node.expanded = false;
+      }
+    }),
+  );
+}
+
 /** 在目录下生成不冲突的名称（如 未命名.md / 未命名-2.md）。 */
 function uniqueName(existing: Set<string>, base: string, ext = ""): string {
   const full = `${base}${ext}`;
@@ -152,11 +182,17 @@ export const useWorkspaceStore = defineStore("workspace", {
       }
     },
 
-    /** 重新加载整棵工作区文件树（例如 Git 分支切换后调用）。 */
+    /** 重新加载工作区文件树，并保留当前已展开目录和选中路径。 */
     async refresh(): Promise<void> {
       if (!this.rootPath) return;
       try {
-        this.tree = await buildChildren(this.rootPath);
+        const expandedPaths = collectExpandedPaths(this.tree);
+        const nextTree = await buildChildren(this.rootPath);
+        await restoreExpandedDirs(nextTree, expandedPaths);
+        this.tree = nextTree;
+        if (this.selectedPath && !findNode(nextTree, this.selectedPath)) {
+          this.selectedPath = null;
+        }
       } catch (err) {
         toastError(err, "刷新文件树失败");
       }
@@ -186,6 +222,7 @@ export const useWorkspaceStore = defineStore("workspace", {
      * @returns 新建文件绝对路径；失败返回 null
      */
     async createMarkdownFile(preferredName?: string | null): Promise<string | null> {
+      if (!this.rootPath && !(await this.openFolder())) return null;
       const parent = this.resolveCreateParent();
       if (!parent || !this.rootPath) {
         showToast("请先打开工作区", "error");
@@ -225,6 +262,7 @@ export const useWorkspaceStore = defineStore("workspace", {
      * @returns 新建目录绝对路径；失败返回 null
      */
     async createFolder(preferredName?: string | null): Promise<string | null> {
+      if (!this.rootPath && !(await this.openFolder())) return null;
       const parent = this.resolveCreateParent();
       if (!parent || !this.rootPath) {
         showToast("请先打开工作区", "error");

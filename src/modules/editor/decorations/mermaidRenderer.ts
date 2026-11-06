@@ -51,11 +51,6 @@ function ensureInitialized(api: MermaidApi, fontSize: number): void {
   lastFontSize = fontSize;
 }
 
-/** 预热：后台加载 mermaid 包，不阻塞首屏。 */
-export function preloadMermaid(): void {
-  void getMermaid();
-}
-
 /**
  * 串行渲染（同字体配置只 initialize 一次），命中缓存则立即返回。
  */

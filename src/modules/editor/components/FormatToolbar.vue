@@ -263,7 +263,12 @@ onBeforeUnmount(() => {
 
       <div class="mm-format-toolbar__sep" aria-hidden="true"></div>
 
-      <button type="button" class="mm-format-toolbar__btn" title="斜体" @click="run({ type: 'italic' })">
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="斜体"
+        @click="run({ type: 'italic' })"
+      >
         <em>I</em>
       </button>
       <button
@@ -274,14 +279,31 @@ onBeforeUnmount(() => {
       >
         <span class="mm-format-toolbar__strike">S</span>
       </button>
-      <button type="button" class="mm-format-toolbar__btn" title="下划线" @click="run({ type: 'underline' })">
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="下划线"
+        @click="run({ type: 'underline' })"
+      >
         <span class="mm-format-toolbar__u">U</span>
       </button>
-      <button type="button" class="mm-format-toolbar__btn" title="上标" @click="run({ type: 'superscript' })">
-        X<sup>2</sup>
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="上标"
+        aria-label="上标"
+        @click="run({ type: 'superscript' })"
+      >
+        <span class="mm-format-toolbar__script">X<sup>2</sup></span>
       </button>
-      <button type="button" class="mm-format-toolbar__btn" title="下标" @click="run({ type: 'subscript' })">
-        X<sub>2</sub>
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="下标"
+        aria-label="下标"
+        @click="run({ type: 'subscript' })"
+      >
+        <span class="mm-format-toolbar__script">X<sub>2</sub></span>
       </button>
       <button
         type="button"
@@ -352,10 +374,28 @@ onBeforeUnmount(() => {
         ×格式
       </button>
 
-      <button type="button" class="mm-format-toolbar__btn" title="左对齐" @click="setAlign('left')">左</button>
-      <button type="button" class="mm-format-toolbar__btn" title="居中" @click="setAlign('center')">中</button>
-      <button type="button" class="mm-format-toolbar__btn" title="右对齐" @click="setAlign('right')">右</button>
-      <button type="button" class="mm-format-toolbar__btn" title="两端对齐" @click="setAlign('justify')">齐</button>
+      <button type="button" class="mm-format-toolbar__btn" title="左对齐" @click="setAlign('left')">
+        左
+      </button>
+      <button type="button" class="mm-format-toolbar__btn" title="居中" @click="setAlign('center')">
+        中
+      </button>
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="右对齐"
+        @click="setAlign('right')"
+      >
+        右
+      </button>
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="两端对齐"
+        @click="setAlign('justify')"
+      >
+        齐
+      </button>
 
       <div class="mm-format-toolbar__sep" aria-hidden="true"></div>
 
@@ -375,10 +415,20 @@ onBeforeUnmount(() => {
       >
         1.
       </button>
-      <button type="button" class="mm-format-toolbar__btn" title="增加缩进" @click="run({ type: 'indent' })">
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="增加缩进"
+        @click="run({ type: 'indent' })"
+      >
         →
       </button>
-      <button type="button" class="mm-format-toolbar__btn" title="减少缩进" @click="run({ type: 'outdent' })">
+      <button
+        type="button"
+        class="mm-format-toolbar__btn"
+        title="减少缩进"
+        @click="run({ type: 'outdent' })"
+      >
         ←
       </button>
 
@@ -520,6 +570,30 @@ onBeforeUnmount(() => {
 .mm-format-toolbar__btn--mono {
   font-family: var(--mm-font-mono, Consolas, monospace);
   font-size: 11px;
+}
+
+.mm-format-toolbar__script {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 17px;
+}
+
+.mm-format-toolbar__script sup,
+.mm-format-toolbar__script sub {
+  position: relative;
+  margin-left: 1px;
+  font-size: 8px;
+  line-height: 1;
+  vertical-align: baseline;
+}
+
+.mm-format-toolbar__script sup {
+  top: -4px;
+}
+
+.mm-format-toolbar__script sub {
+  top: 4px;
 }
 
 .mm-format-toolbar__strike {
